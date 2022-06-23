@@ -94,7 +94,7 @@ impl Authenticator for RadiusAuthenticator {
         let key = SessionKey(source.clone().into_owned());
         if let Some(status) = self.state.lock().unwrap().cache.cache_get(&key) {
             log_id!(trace, log_id, "Cache hit");
-            return *status;
+            return status.clone();
         }
 
         let mut wait = match self.state.lock().unwrap().sessions.entry(key.clone()) {
@@ -156,7 +156,7 @@ impl Authenticator for RadiusAuthenticator {
             }
         }
 
-        state.cache.cache_set(key, status);
+        state.cache.cache_set(key, status.clone());
 
         status
     }

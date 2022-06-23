@@ -56,8 +56,17 @@ pub(crate) enum AuthorizedRequest {
 
 /// An abstract interface for a TCP connection request implementation
 pub(crate) trait PendingTcpConnectRequest: StreamId + Send {
+    /// Get the address of a VPN client made the connection request
+    fn client_address(&self) -> io::Result<SocketAddr>;
+
     /// Get the target host
     fn destination(&self) -> io::Result<TcpDestination>;
+
+    /// Get the name of a platform of the VPN client
+    fn client_platform(&self) -> Option<String>;
+
+    /// Get the name of an application initiated the request
+    fn app_name(&self) -> Option<String>;
 
     /// Notify a client of the successfully tunneled connection
     fn succeed_request(self: Box<Self>) -> io::Result<(Box<dyn pipe::Source>, Box<dyn pipe::Sink>)>;
@@ -73,6 +82,12 @@ pub(crate) enum DatagramPipeHalves {
 
 /// An abstract interface for a datagram multiplexer open request implementation
 pub(crate) trait PendingDatagramMultiplexerRequest: StreamId + Send {
+    /// Get the address of a VPN client made the connection request
+    fn client_address(&self) -> io::Result<SocketAddr>;
+
+    /// Get the name of a platform of the VPN client
+    fn client_platform(&self) -> Option<String>;
+
     /// Notify a client of the successfully opened multiplexer
     fn succeed_request(self: Box<Self>) -> io::Result<DatagramPipeHalves>;
 

@@ -74,7 +74,7 @@ fn main() {
         .expect("Failed to set up runtime");
 
     let shutdown = Shutdown::new();
-    let mut core = Core::new(parsed, shutdown.clone());
+    let mut core = Core::new(parsed, shutdown.clone()).expect("Couldn't create core instance");
 
     rt.spawn_blocking(move || {
         core.listen().expect("Error while listening IO events");

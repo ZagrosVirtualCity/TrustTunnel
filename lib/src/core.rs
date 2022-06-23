@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, UdpSocket};
 use crate::direct_forwarder::DirectForwarder;
-use crate::{authentication, http_ping_handler, log_id, log_utils, metrics, protocol_selector, reverse_proxy, utils};
+use crate::{authentication, http_ping_handler, log_id, log_utils, metrics, net_utils, protocol_selector, reverse_proxy, settings, tunnel, utils};
+use crate::authentication::DummyAuthenticator;
 use crate::protocol_selector::{Channel, Protocol};
 use crate::forwarder::Forwarder;
 use crate::http1_codec::Http1Codec;
@@ -16,12 +17,18 @@ use crate::http_downstream::HttpDownstream;
 use crate::icmp_forwarder::IcmpForwarder;
 use crate::metrics::Metrics;
 use crate::quic_multiplexer::{QuicMultiplexer, QuicSocket};
-use crate::settings::{ForwardProtocolSettings, ListenProtocolSettings, Settings};
+use crate::settings::{ForwardProtocolSettings, ListenProtocolSettings, Settings, Socks5ForwarderSettings};
 use crate::shutdown::Shutdown;
 use crate::socks5_forwarder::Socks5Forwarder;
 use crate::tls_listener::{TlsAcceptor, TlsListener};
 use crate::tunnel::Tunnel;
 
+
+#[derive(Debug)]
+pub enum Error {
+    /// Passed settings did not pass the validation
+    SettingsValidation(settings::ValidationError),
+}
 
 pub struct Core {
     context: Arc<Context>,
@@ -39,12 +46,23 @@ pub(crate) struct Context {
 
 impl Core {
     pub fn new(
-        settings: Settings,
+        mut settings: Settings,
         shutdown: Arc<Mutex<Shutdown>>,
-    ) -> Self {
+    ) -> Result<Self, Error> {
+        if !settings.is_built() {
+            settings.validate().map_err(Error::SettingsValidation)?;
+        }
+
+        match &settings.forward_protocol {
+            ForwardProtocolSettings::Socks5(Socks5ForwarderSettings { extended_auth: true, .. }) => {
+                settings.authenticator = Arc::new(DummyAuthenticator::redirect_to_forwarder());
+            },
+            _ => (),
+        }
+
         let settings = Arc::new(settings);
 
-        Self {
+        Ok(Self {
             context: Arc::new(Context {
                 settings: settings.clone(),
                 icmp_forwarder: if settings.icmp.is_none() {
@@ -57,7 +75,7 @@ impl Core {
                 next_client_id: Default::default(),
                 next_tunnel_id: Default::default(),
             }),
-        }
+        })
     }
 
     /// Run an endpoint instance inside the caller provided asynchronous runtime.
@@ -166,7 +184,12 @@ impl Core {
                         .await
                         .unwrap_or_else(|_| Err(io::Error::from(ErrorKind::TimedOut)))
                     {
-                        Ok(stream) => Core::on_new_tls_connection(context.clone(), stream, client_id).await,
+                        Ok(stream) =>
+                            if let Err((client_id, message)) = Core::on_new_tls_connection(
+                                context.clone(), stream, client_id,
+                            ).await {
+                                log_id!(debug, client_id, "{}", message);
+                            },
                         Err(e) => log_id!(debug, client_id, "TLS handshake failed: {}", e),
                     }
                 }
@@ -217,22 +240,22 @@ impl Core {
         forwarder.listen().await
     }
 
-    async fn on_new_tls_connection(context: Arc<Context>, acceptor: TlsAcceptor, client_id: log_utils::IdChain<u64>) {
+    async fn on_new_tls_connection(
+        context: Arc<Context>,
+        acceptor: TlsAcceptor,
+        client_id: log_utils::IdChain<u64>,
+    ) -> Result<(), (log_utils::IdChain<u64>, String)> {
         let sni = match acceptor.sni() {
             Some(s) => s,
-            None => {
-                log_id!(debug, client_id, "Drop TLS connection due to absence of SNI");
-                return;
-            }
+            None => return Err((client_id, "Drop TLS connection due to absence of SNI".to_string())),
         };
 
         let alpn = match acceptor.alpn().map(String::from_utf8) {
             Some(Ok(p)) => Some(p),
-            Some(Err(e)) => {
-                log_id!(debug, client_id, "Drop TLS connection due to malformed ALPN: {:?} (error: {})",
-                    acceptor.alpn().unwrap(), e);
-                return;
-            }
+            Some(Err(e)) => return Err((
+                client_id,
+                format!("Drop TLS connection due to malformed ALPN: {:?} (error: {})", acceptor.alpn().unwrap(), e)
+            )),
             None => None,
         };
 
@@ -243,13 +266,11 @@ impl Core {
                 | Ok(Channel::Ping(Protocol::Http3))
                 | Ok(Channel::ReverseProxy(Protocol::Http3))
                 => {
-                    log_id!(debug, client_id, "Unexpected connection protocol - dropping tunnel");
-                    return;
+                    return Err((client_id, "Unexpected connection protocol - dropping tunnel".to_string()));
                 }
                 Ok(x) => x,
                 Err(e) => {
-                    log_id!(debug, client_id, "Dropping tunnel due to error: {}", e);
-                    return;
+                    return Err((client_id, format!("Dropping tunnel due to error: {}", e)));
                 }
             };
         log_id!(trace, client_id, "Selected protocol: {:?}", channel);
@@ -260,8 +281,7 @@ impl Core {
                 s
             }
             Err(e) => {
-                log_id!(debug, client_id, "TLS connection failed: {}", e);
-                return;
+                return Err((client_id, format!("TLS connection failed: {}", e)));
             }
         };
 
@@ -274,21 +294,38 @@ impl Core {
                 Self::on_tunnel_request(
                     context,
                     protocol,
-                    Self::make_tcp_http_codec(protocol, core_settings, stream, tunnel_id.clone()),
+                    match Self::make_tcp_http_codec(
+                        protocol, core_settings, stream, tunnel_id.clone(),
+                    ) {
+                        Ok(x) => x,
+                        Err(e) => return Err((client_id, format!("Failed to create HTTP codec: {}", e))),
+                    },
                     &sni,
                     tunnel_id,
                 ).await
             }
             Channel::Ping(protocol) => http_ping_handler::listen(
-                Self::make_tcp_http_codec(protocol, core_settings, stream, client_id.clone()),
+                match Self::make_tcp_http_codec(
+                    protocol, core_settings, stream, client_id.clone(),
+                ) {
+                    Ok(x) => x,
+                    Err(e) => return Err((client_id, format!("Failed to create HTTP codec: {}", e))),
+                },
                 client_id,
             ).await,
             Channel::ReverseProxy(protocol) => reverse_proxy::listen(
                 context,
-                Self::make_tcp_http_codec(protocol, core_settings, stream, client_id.clone()),
+                match Self::make_tcp_http_codec(
+                    protocol, core_settings, stream, client_id.clone(),
+                ) {
+                    Ok(x) => x,
+                    Err(e) => return Err((client_id, format!("Failed to create HTTP codec: {}", e))),
+                },
                 client_id,
             ).await,
         }
+
+        Ok(())
     }
 
     async fn on_new_quic_connection(
@@ -360,15 +397,20 @@ impl Core {
     ) {
         let _metrics_guard = Metrics::client_sessions_counter(context.metrics.clone(), protocol);
 
-        let authenticated = server_name != context.settings.tunnel_tls_host_info.hostname
-            && match context.settings.authenticator.authenticate(
-                utils::scan_sni_authentication(server_name, &context.settings.tunnel_tls_host_info.hostname).unwrap(),
-                &tunnel_id
-            ).await {
-                authentication::Status::Pass => true,
-                authentication::Status::Reject => {
-                    log_id!(debug, tunnel_id, "SNI authentication failed");
-                    return;
+        let authentication_policy =
+            if server_name == context.settings.tunnel_tls_host_info.hostname {
+                tunnel::AuthenticationPolicy::Default
+            } else {
+                match context.settings.authenticator.authenticate(
+                    utils::scan_sni_authentication(server_name, &context.settings.tunnel_tls_host_info.hostname).unwrap(),
+                    &tunnel_id
+                ).await {
+                    authentication::Status::Pass => tunnel::AuthenticationPolicy::Authenticated,
+                    authentication::Status::Reject => {
+                        log_id!(debug, tunnel_id, "SNI authentication failed");
+                        return;
+                    }
+                    authentication::Status::TryThroughForwarder(x) => tunnel::AuthenticationPolicy::ThroughForwarder(x.clone()),
                 }
             };
 
@@ -377,7 +419,7 @@ impl Core {
             context.clone(),
             Box::new(HttpDownstream::new(context.settings.clone(), codec)),
             Self::make_forwarder(context),
-            authenticated,
+            authentication_policy,
             tunnel_id.clone(),
         );
 
@@ -388,19 +430,21 @@ impl Core {
         }
     }
 
-    fn make_tcp_http_codec<IO: 'static + AsyncRead + AsyncWrite + Unpin + Send>(
+    fn make_tcp_http_codec<IO>(
         protocol: Protocol,
         core_settings: Arc<Settings>,
         io: IO,
         log_id: log_utils::IdChain<u64>,
-    ) -> Box<dyn HttpCodec> {
+    ) -> io::Result<Box<dyn HttpCodec>>
+        where IO: 'static + AsyncRead + AsyncWrite + Unpin + Send + net_utils::PeerAddr
+    {
         match protocol {
-            Protocol::Http1 => Box::new(Http1Codec::new(
+            Protocol::Http1 => Ok(Box::new(Http1Codec::new(
                 core_settings, io, log_id.clone(),
-            )),
-            Protocol::Http2 => Box::new(Http2Codec::new(
+            ))),
+            Protocol::Http2 => Ok(Box::new(Http2Codec::new(
                 core_settings, io, log_id.clone(),
-            )),
+            )?)),
             Protocol::Http3 => unreachable!(),
         }
     }

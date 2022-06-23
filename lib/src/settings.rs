@@ -11,8 +11,38 @@ use crate::authentication::file_based::FileBasedAuthenticator;
 use crate::authentication::radius::RadiusAuthenticator;
 
 
-pub type Result<T> = std::result::Result<T, BuilderError>;
-pub type Socks5Result<T> = std::result::Result<T, Socks5Error>;
+pub type BuilderResult<T> = Result<T, BuilderError>;
+pub type Socks5BuilderResult<T> = Result<T, Socks5Error>;
+
+#[derive(Debug)]
+pub enum ValidationError {
+    /// Invalid [`Settings.listen_address`]
+    ListenAddress(String),
+    /// Invalid [`Settings.tunnel_tls_host_info`]
+    TunnelTlsHostInfo(String),
+    /// Invalid [`Settings.ping_tls_host_info`]
+    PingTlsHostInfo(String),
+    /// Invalid [`Settings.reverse_proxy`]
+    ReverseProxy(String),
+    /// [`Settings.listen_protocols`] are not set
+    ListenProtocols,
+}
+
+#[derive(Debug)]
+pub enum BuilderError {
+    /// Invalid [`Settings.tunnel_tls_host_info`]
+    TunnelTlsHostInfo(String),
+    /// Invalid authentication info
+    AuthInfo(String),
+    /// Built settings did not pass the validation
+    Validation(ValidationError),
+}
+
+#[derive(Debug)]
+pub enum Socks5Error {
+    /// Invalid [`Socks5ForwarderSettings.address`]
+    Address(String),
+}
 
 #[derive(Deserialize)]
 pub struct Settings {
@@ -25,21 +55,13 @@ pub struct Settings {
     pub(crate) listen_address: SocketAddr,
     /// The TLS host info for traffic tunneling
     pub(crate) tunnel_tls_host_info: TlsHostInfo,
-    // @todo: check uniqueness when parsing from json
     /// The TLS host info for HTTPS pinging.
     /// With this one set up the endpoint will respond with `200 OK` to HTTPS `GET` requests
     /// to the specified domain.
     /// The host name MUST differ from the tunneling host and reverse proxy ones.
     pub(crate) ping_tls_host_info: Option<TlsHostInfo>,
     /// The reverse proxy settings.
-    /// With this one set up the endpoint does TLS termination on such connections and
-    /// translates HTTP/x traffic into HTTP/1.1 protocol towards the server and back
-    /// into original HTTP/x towards the client. Like this:
-    ///
-    /// ```(client) TLS(HTTP/x) <--(endpoint)--> (server) HTTP/1.1```
-    ///
-    /// The translated HTTP/1.1 requests have the custom header `X-Original-Protocol`
-    /// appended. For now, its value can be either `HTTP1`, or `HTTP3`.
+    /// See [`SettingsBuilder::reverse_proxy`] for detailed description.
     pub(crate) reverse_proxy: Option<ReverseProxySettings>,
     /// IPv6 availability
     #[serde(default = "Settings::default_ipv6_available")]
@@ -79,6 +101,13 @@ pub struct Settings {
     pub(crate) icmp: Option<IcmpSettings>,
     /// The metrics handling settings
     pub(crate) metrics: Option<MetricsSettings>,
+
+    /// Whether an instance was built through a [`SettingsBuilder`].
+    /// This flag is a workaround for absence of the ability to validate
+    /// the deserialized structure.
+    /// https://github.com/serde-rs/serde/issues/642
+    #[serde(skip)]
+    built: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -129,6 +158,10 @@ pub struct DirectForwarderSettings {}
 pub struct Socks5ForwarderSettings {
     /// The address of a proxy
     pub(crate) address: SocketAddr,
+    /// The extended authentication flag.
+    /// See [`Socks5ForwarderSettingsBuilder::extended_auth`] for details.
+    #[serde(default)]
+    pub(crate) extended_auth: bool,
 }
 
 pub struct Socks5ForwarderSettingsBuilder {
@@ -146,8 +179,10 @@ pub enum ListenProtocolSettings {
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthenticatorSettings {
+    /// Authenticate using [`FileBasedAuthenticator`]
     File(FileBasedAuthenticatorSettings),
-    Radius(RadiusAuthenticatorSettings)
+    /// Authenticate using [`RadiusAuthenticator`]
+    Radius(RadiusAuthenticatorSettings),
 }
 
 #[derive(Deserialize)]
@@ -308,31 +343,85 @@ pub struct MetricsSettingsBuilder {
     settings: MetricsSettings,
 }
 
-#[derive(Debug)]
-pub enum BuilderError {
-    /// Invalid [`Settings.listen_address`]
-    ListenAddress(String),
-    /// Invalid [`Settings.tunnel_tls_host_info`]
-    TunnelTlsHostInfo(String),
-    /// Invalid [`Settings.ping_tls_host_info`]
-    PingTlsHostInfo(String),
-    /// Invalid [`Settings.reverse_proxy`]
-    ReverseProxy(String),
-    /// [`Settings.listen_protocols`] are not set
-    ListenProtocols,
-    /// Invalid authentication info
-    AuthInfo(String),
-}
-
-#[derive(Debug)]
-pub enum Socks5Error {
-    /// Invalid [`Socks5ForwarderSettings.address`]
-    Address(String),
-}
-
 impl Settings {
     pub fn builder() -> SettingsBuilder {
         SettingsBuilder::new()
+    }
+
+    pub(crate) fn is_built(&self) -> bool {
+        self.built
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
+        if self.listen_address.ip().is_unspecified() && self.listen_address.port() == 0 {
+            return Err(ValidationError::ListenAddress("Not set".to_string()));
+        }
+
+        validate_file_path(&self.tunnel_tls_host_info.cert_chain_path)
+            .map_err(|e| ValidationError::TunnelTlsHostInfo(
+                format!("Invalid cert chain path: {}", e)
+            ))?;
+        validate_file_path(&self.tunnel_tls_host_info.private_key_path)
+            .map_err(|e| ValidationError::TunnelTlsHostInfo(
+                format!("Invalid key path: {}", e)
+            ))?;
+
+        if let Some(x) = &self.ping_tls_host_info {
+            if x.hostname == self.tunnel_tls_host_info.hostname {
+                return Err(ValidationError::PingTlsHostInfo(
+                    "Host name equals to tunneling one".into()
+                ));
+            }
+            if self.reverse_proxy.as_ref()
+                .map_or(false, |s| x.hostname == s.tls_info.hostname)
+            {
+                return Err(ValidationError::PingTlsHostInfo(
+                    "Host name equals to reverse proxy one".into()
+                ));
+            }
+            validate_file_path(&x.cert_chain_path)
+                .map_err(|e| ValidationError::PingTlsHostInfo(
+                    format!("Invalid cert chain path: {}", e)
+                ))?;
+            validate_file_path(&x.private_key_path)
+                .map_err(|e| ValidationError::PingTlsHostInfo(
+                    format!("Invalid key path: {}", e)
+                ))?;
+        }
+
+        if let Some(x) = &self.reverse_proxy {
+            if x.server_address.ip().is_unspecified() && x.server_address.port() == 0 {
+                return Err(ValidationError::ReverseProxy(
+                    "Invalid origin server address".into()
+                ));
+            }
+            if x.tls_info.hostname == self.tunnel_tls_host_info.hostname {
+                return Err(ValidationError::ReverseProxy(
+                    "Host name equals to tunneling one".into()
+                ));
+            }
+            if self.ping_tls_host_info.as_ref()
+                .map_or(false, |i| x.tls_info.hostname == i.hostname)
+            {
+                return Err(ValidationError::ReverseProxy(
+                    "Host name equals to HTTPS pinging one".into()
+                ));
+            }
+            validate_file_path(&x.tls_info.cert_chain_path)
+                .map_err(|e| ValidationError::ReverseProxy(
+                    format!("Invalid cert chain path: {}", e)
+                ))?;
+            validate_file_path(&x.tls_info.private_key_path)
+                .map_err(|e| ValidationError::ReverseProxy(
+                    format!("Invalid key path: {}", e)
+                ))?;
+        }
+
+        if self.listen_protocols.is_empty() {
+            return Err(ValidationError::ListenProtocols);
+        }
+
+        Ok(())
     }
 
     fn default_threads_number() -> usize {
@@ -348,7 +437,7 @@ impl Settings {
     }
 
     fn default_authenticator() -> Arc<dyn Authenticator> {
-        Arc::new(DummyAuthenticator {})
+        Arc::new(DummyAuthenticator::default())
     }
 
     fn default_tls_handshake_timeout() -> Duration {
@@ -391,6 +480,7 @@ impl Default for Settings {
             authenticator: Settings::default_authenticator(),
             icmp: None,
             metrics: Default::default(),
+            built: false,
         }
     }
 }
@@ -565,6 +655,7 @@ impl SettingsBuilder {
                 authenticator: Settings::default_authenticator(),
                 icmp: None,
                 metrics: Default::default(),
+                built: true,
             },
             tunnel_tls_host_info_set: false,
             authenticator: None,
@@ -572,59 +663,16 @@ impl SettingsBuilder {
     }
 
     /// Finalize [`Settings`]
-    pub fn build(mut self) -> Result<Settings> {
-        if self.settings.listen_address.ip().is_unspecified() && self.settings.listen_address.port() == 0 {
-            return Err(BuilderError::ListenAddress("Not set".to_string()));
-        }
-
+    pub fn build(mut self) -> BuilderResult<Settings> {
         if !self.tunnel_tls_host_info_set {
             return Err(BuilderError::TunnelTlsHostInfo("Not set".to_string()));
-        }
-        validate_file_path(&self.settings.tunnel_tls_host_info.cert_chain_path)
-            .map_err(|e| BuilderError::TunnelTlsHostInfo(format!("Invalid cert chain path: {}", e)))?;
-        validate_file_path(&self.settings.tunnel_tls_host_info.private_key_path)
-            .map_err(|e| BuilderError::TunnelTlsHostInfo(format!("Invalid key path: {}", e)))?;
-
-        if let Some(x) = &self.settings.ping_tls_host_info {
-            if x.hostname == self.settings.tunnel_tls_host_info.hostname {
-                return Err(BuilderError::PingTlsHostInfo("Host name equals to tunneling one".into()));
-            }
-            if self.settings.reverse_proxy.as_ref()
-                .map_or(false, |s| x.hostname == s.tls_info.hostname)
-            {
-                return Err(BuilderError::PingTlsHostInfo("Host name equals to reverse proxy one".into()));
-            }
-            validate_file_path(&x.cert_chain_path)
-                .map_err(|e| BuilderError::PingTlsHostInfo(format!("Invalid cert chain path: {}", e)))?;
-            validate_file_path(&x.private_key_path)
-                .map_err(|e| BuilderError::PingTlsHostInfo(format!("Invalid key path: {}", e)))?;
-        }
-
-        if let Some(x) = &self.settings.reverse_proxy {
-            if x.server_address.ip().is_unspecified() && x.server_address.port() == 0 {
-                return Err(BuilderError::ReverseProxy("Invalid origin server address".into()));
-            }
-            if x.tls_info.hostname == self.settings.tunnel_tls_host_info.hostname {
-                return Err(BuilderError::ReverseProxy("Host name equals to tunneling one".into()));
-            }
-            if self.settings.ping_tls_host_info.as_ref()
-                .map_or(false, |i| x.tls_info.hostname == i.hostname)
-            {
-                return Err(BuilderError::ReverseProxy("Host name equals to HTTPS pinging one".into()));
-            }
-            validate_file_path(&x.tls_info.cert_chain_path)
-                .map_err(|e| BuilderError::ReverseProxy(format!("Invalid cert chain path: {}", e)))?;
-            validate_file_path(&x.tls_info.private_key_path)
-                .map_err(|e| BuilderError::ReverseProxy(format!("Invalid key path: {}", e)))?;
-        }
-
-        if self.settings.listen_protocols.is_empty() {
-            return Err(BuilderError::ListenProtocols);
         }
 
         self.settings.authenticator = Arc::from(
             self.authenticator.ok_or_else(|| BuilderError::AuthInfo("Not set".to_string()))?
         );
+
+        self.settings.validate().map_err(BuilderError::Validation)?;
 
         Ok(self.settings)
     }
@@ -660,11 +708,14 @@ impl SettingsBuilder {
     }
 
     /// Set the reverse proxy settings.
-    /// With this one set up the endpoint will do TLS termination on such connections,
-    /// translate all HTTP requests to HTTP1 protocol and send them to the origin server,
-    /// and, conversely,
-    /// and forward all the data received from a client to the origin server and
-    /// all the data received from the server back to the client.
+    /// With this one set up the endpoint does TLS termination on such connections and
+    /// translates HTTP/x traffic into HTTP/1.1 protocol towards the server and back
+    /// into original HTTP/x towards the client. Like this:
+    ///
+    /// ```(client) TLS(HTTP/x) <--(endpoint)--> (server) HTTP/1.1```
+    ///
+    /// The translated HTTP/1.1 requests have the custom header `X-Original-Protocol`
+    /// appended. For now, its value can be either `HTTP1`, or `HTTP3`.
     pub fn reverse_proxy(mut self, settings: ReverseProxySettings) -> Self {
         self.settings.reverse_proxy = Some(settings);
         self
@@ -730,12 +781,13 @@ impl Socks5ForwarderSettingsBuilder {
         Self {
             settings: Socks5ForwarderSettings {
                 address: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
+                extended_auth: false,
             },
         }
     }
 
     /// Finalize [`Socks5ForwarderSettings`]
-    pub fn build(self) -> Socks5Result<Socks5ForwarderSettings> {
+    pub fn build(self) -> Socks5BuilderResult<Socks5ForwarderSettings> {
         if self.settings.address.ip().is_unspecified() {
             return Err(Socks5Error::Address("Not set".to_string()));
         }
@@ -749,6 +801,26 @@ impl Socks5ForwarderSettingsBuilder {
             .next()
             .ok_or_else(|| io::Error::new(ErrorKind::Other, "Address is parsed to empty list"))?;
         Ok(self)
+    }
+
+    /// Enable/disable extended authentication.
+    /// If enabled, the username during authentication will be formatted as follows:
+    ///
+    /// ```<username>@<client_address>@<client_platform>@<app_name>[@]```
+    ///
+    /// `<client_address>` - the address of a VPN client sent the request
+    /// `<client_platform>` - the name of a platform of the VPN client (_may be absent_,
+    /// e.g, `uname@54.243.99.69:7777@@curl`)
+    /// `<app_name>` - the name of an application initiated the request (_may be absent_,
+    /// e.g, `uname@54.243.99.69:7777@Linux@`)
+    ///
+    /// In case the resulting string exceeds the boundaries, it's marked as truncated
+    /// with `@` character (e.g., `uname@54.243.99.69:7777@Windows@very_long_app_name@`).
+    ///
+    /// **NOTE**: setting this to true overrides other authentication settings
+    pub fn extended_auth(mut self, v: bool) -> Self {
+        self.settings.extended_auth = v;
+        self
     }
 }
 
@@ -1000,7 +1072,7 @@ impl IcmpSettingsBuilder {
     }
 
     /// Finalize [`IcmpSettings`]
-    pub fn build(self) -> Result<IcmpSettings> {
+    pub fn build(self) -> BuilderResult<IcmpSettings> {
         Ok(self.settings)
     }
 }
@@ -1027,7 +1099,7 @@ impl MetricsSettingsBuilder {
     }
 
     /// Finalize [`MetricsSettings`]
-    pub fn build(self) -> Result<MetricsSettings> {
+    pub fn build(self) -> BuilderResult<MetricsSettings> {
         Ok(self.settings)
     }
 }
@@ -1046,7 +1118,7 @@ fn validate_file_path(path: &str) -> io::Result<()> {
     }
 }
 
-fn deserialize_duration_secs<'de, D>(deserializer: D) -> std::result::Result<Duration, D::Error>
+fn deserialize_duration_secs<'de, D>(deserializer: D) -> Result<Duration, D::Error>
     where
         D: serde::de::Deserializer<'de>,
 {
@@ -1059,7 +1131,7 @@ fn deserialize_duration_secs<'de, D>(deserializer: D) -> std::result::Result<Dur
             write!(formatter, "an unsigned integer")
         }
 
-        fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E> where E: serde::de::Error {
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> where E: serde::de::Error {
             Ok(v)
         }
     }
@@ -1068,7 +1140,7 @@ fn deserialize_duration_secs<'de, D>(deserializer: D) -> std::result::Result<Dur
     Ok(Duration::from_secs(path))
 }
 
-fn deserialize_protocols<'de, D>(deserializer: D) -> std::result::Result<Vec<ListenProtocolSettings>, D::Error>
+fn deserialize_protocols<'de, D>(deserializer: D) -> Result<Vec<ListenProtocolSettings>, D::Error>
     where
         D: serde::de::Deserializer<'de>,
 {
@@ -1081,7 +1153,7 @@ fn deserialize_protocols<'de, D>(deserializer: D) -> std::result::Result<Vec<Lis
             write!(formatter, "a non-empty list of protocol settings")
         }
 
-        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
             where
                 A: serde::de::SeqAccess<'de>,
         {
@@ -1101,7 +1173,7 @@ fn deserialize_protocols<'de, D>(deserializer: D) -> std::result::Result<Vec<Lis
     deserializer.deserialize_seq(Visitor)
 }
 
-fn deserialize_file_path<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+fn deserialize_file_path<'de, D>(deserializer: D) -> Result<String, D::Error>
     where
         D: serde::de::Deserializer<'de>,
 {
@@ -1114,7 +1186,7 @@ fn deserialize_file_path<'de, D>(deserializer: D) -> std::result::Result<String,
             write!(formatter, "a path to an existent accessible file")
         }
 
-        fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E> where E: serde::de::Error {
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: serde::de::Error {
             validate_file_path(v)
                 .map(|_| v.to_string())
                 .map_err(|e| E::invalid_value(
@@ -1127,7 +1199,7 @@ fn deserialize_file_path<'de, D>(deserializer: D) -> std::result::Result<String,
     deserializer.deserialize_str(Visitor)
 }
 
-fn deserialize_authenticator<'de, D>(deserializer: D) -> std::result::Result<Arc<dyn Authenticator>, D::Error>
+fn deserialize_authenticator<'de, D>(deserializer: D) -> Result<Arc<dyn Authenticator>, D::Error>
     where
         D: serde::de::Deserializer<'de>,
 {

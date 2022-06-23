@@ -555,6 +555,10 @@ impl QuicSocket {
         self.id.clone()
     }
 
+    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
+        Ok(self.peer)
+    }
+
     pub fn server_name(&self) -> Option<String> {
         self.quic_conn.lock().unwrap().server_name().map(String::from)
     }

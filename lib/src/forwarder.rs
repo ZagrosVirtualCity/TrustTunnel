@@ -4,7 +4,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
-use crate::{datagram_pipe, downstream, icmp_utils, log_utils, pipe};
+use crate::{authentication, datagram_pipe, downstream, icmp_utils, log_utils, pipe};
 use crate::net_utils::TcpDestination;
 
 
@@ -28,6 +28,29 @@ pub(crate) struct IcmpDatagramMeta {
 pub(crate) struct IcmpDatagram {
     pub meta: IcmpDatagramMeta,
     pub message: icmp_utils::Message,
+}
+
+#[derive(Debug)]
+pub(crate) struct TcpConnectionMeta {
+    /// Address of a VPN client made the connection request
+    pub client_address: SocketAddr,
+    /// Destination address of the connection
+    pub destination: TcpDestination,
+    /// Authentication request source
+    pub auth: Option<authentication::Source<'static>>,
+    /// The name of a platform of the VPN client
+    pub client_platform: Option<String>,
+    /// The name of an application initiated the request
+    pub app_name: Option<String>,
+}
+
+pub(crate) struct UdpMultiplexerMeta {
+    /// An address of the VPN client establishing the UDP tunnel
+    pub client_address: SocketAddr,
+    /// Authentication request source
+    pub auth: Option<authentication::Source<'static>>,
+    /// The name of a platform of the VPN client
+    pub client_platform: Option<String>,
 }
 
 /// An abstract interface for a TCP connector implementation
@@ -61,12 +84,16 @@ pub(crate) enum UdpDatagramReadStatus {
 pub(crate) trait Forwarder: Send {
     /// Create a TCP connector object
     fn tcp_connector(
-        &mut self, id: log_utils::IdChain<u64>, destination: TcpDestination
+        &mut self,
+        id: log_utils::IdChain<u64>,
+        meta: TcpConnectionMeta,
     ) -> io::Result<Box<dyn TcpConnector>>;
 
     /// Create a UDP datagram multiplexer
     fn make_udp_datagram_multiplexer(
-        &mut self, id: log_utils::IdChain<u64>
+        &mut self,
+        id: log_utils::IdChain<u64>,
+        meta: UdpMultiplexerMeta,
     ) -> io::Result<(
         Arc<dyn UdpDatagramPipeShared>,
         Box<dyn datagram_pipe::Source<Output = UdpDatagramReadStatus>>,

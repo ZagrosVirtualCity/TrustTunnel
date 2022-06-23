@@ -100,7 +100,23 @@ The full set of settings is shown bellow in the pseudo-json format:
   "forward_protocol": Enum {
     Default("direct": {}),
     "socks5": {
-      address: "127.0.0.1:1080"
+      "address": "127.0.0.1:1080",
+      /// Enable/disable extended authentication.
+      /// If enabled, the username during authentication will be formatted as follows:
+      ///
+      /// ```<username>@<client_address>@<client_platform>@<app_name>[@]```
+      ///
+      /// `<client_address>` - the address of a VPN client sent the request
+      /// `<client_platform>` - the name of a platform of the VPN client (_may be absent_,
+      /// e.g, `uname@54.243.99.69:7777@@curl`)
+      /// `<app_name>` - the name of an application initiated the request (_may be absent_,
+      /// e.g, `uname@54.243.99.69:7777@Linux@`)
+      ///
+      /// In case the resulting string exceeds the boundaries, it's marked as truncated
+      /// with `@` character (e.g., `uname@54.243.99.69:7777@Windows@very_long_app_name@`).
+      ///
+      /// **NOTE**: setting this to true overrides other authentication settings
+      "extended_auth": Default(false)
     }
   },
   /// The list of listener codec settings

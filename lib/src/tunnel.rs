@@ -5,15 +5,25 @@ use tokio::time;
 use crate::authentication::Status;
 use crate::downstream::{AuthorizedRequest, Downstream, PendingDatagramMultiplexerRequest, PendingTcpConnectRequest};
 use crate::forwarder::Forwarder;
-use crate::{core, datagram_pipe, downstream, log_id, log_utils, pipe, udp_pipe};
+use crate::{authentication, core, datagram_pipe, downstream, forwarder, log_id, log_utils, pipe, udp_pipe};
 use crate::pipe::DuplexPipe;
 
+
+#[derive(Clone)]
+pub(crate) enum AuthenticationPolicy<'this> {
+    /// Perform the regular authentication procedure through the configured authenticator
+    Default,
+    /// The whole connection is authenticated, perform authentication only if requested
+    Authenticated,
+    /// Pass the provided authentication info to the forwarder with each request
+    ThroughForwarder(authentication::Source<'this>),
+}
 
 pub(crate) struct Tunnel {
     context: Arc<core::Context>,
     downstream: Box<dyn Downstream>,
     forwarder: Arc<Mutex<Box<dyn Forwarder>>>,
-    authenticated: bool,
+    authentication_policy: AuthenticationPolicy<'static>,
     id: log_utils::IdChain<u64>,
 }
 
@@ -23,14 +33,14 @@ impl Tunnel {
         context: Arc<core::Context>,
         downstream: Box<dyn Downstream>,
         forwarder: Box<dyn Forwarder>,
-        authenticated: bool,
+        authentication_policy: AuthenticationPolicy<'static>,
         id: log_utils::IdChain<u64>,
     ) -> Self {
         Self {
             context,
             downstream,
             forwarder: Arc::new(Mutex::new(forwarder)),
-            authenticated,
+            authentication_policy,
             id,
         }
     }
@@ -68,7 +78,7 @@ impl Tunnel {
             let context = self.context.clone();
             let forwarder = self.forwarder.clone();
             let request_id = request.id();
-            let authenticated = self.authenticated;
+            let authentication_policy = self.authentication_policy.clone();
             let log_id = self.id.clone();
             let update_metrics = {
                 let metrics = context.metrics.clone();
@@ -82,40 +92,54 @@ impl Tunnel {
             };
 
             tokio::spawn(async move {
-                let info = match request.auth_info() {
-                    Ok(x) => x,
-                    Err(e) => {
-                        log_id!(debug, request_id, "Failed to get auth info: {}", e);
-                        request.fail_request();
-                        return;
-                    }
-                };
-
-                match info {
-                    Some(source) =>
-                        match context.settings.authenticator.authenticate(source, &log_id).await {
-                            Status::Pass => (),
-                            Status::Reject => {
-                                log_id!(debug, request_id, "Authentication failed");
+                let forwarder_auth = match authentication_policy {
+                    AuthenticationPolicy::Default => {
+                        let auth_info = request.auth_info();
+                        match auth_info {
+                            Ok(Some(source)) =>
+                                match context.settings.authenticator.authenticate(source, &log_id).await {
+                                    Status::Pass => None,
+                                    Status::Reject => {
+                                        log_id!(debug, request_id, "Authentication failed");
+                                        request.fail_request();
+                                        return;
+                                    }
+                                    Status::TryThroughForwarder(x) => Some(x),
+                                },
+                            Ok(None) => {
+                                log_id!(debug, request_id, "Got request without authentication info on non-authenticated connection");
                                 request.fail_request();
                                 return;
                             }
-                        },
-                    None if authenticated => (),
-                    None => {
-                        log_id!(debug, request_id, "Got request without authentication info on non-authenticated connection");
-                        request.fail_request();
-                        return;
+                            Err(e) => {
+                                log_id!(debug, request_id, "Failed to get auth info: {}", e);
+                                request.fail_request();
+                                return;
+                            }
+                        }
                     }
-                }
+                    AuthenticationPolicy::Authenticated => None,
+                    AuthenticationPolicy::ThroughForwarder(x) => Some(x),
+                };
 
                 match request.succeed_request() {
                     Ok(None) => (),
                     Ok(Some(AuthorizedRequest::TcpConnect(request))) => {
-                        Tunnel::on_tcp_connect_request(context, forwarder, request, update_metrics).await
+                        if let Err((request, message, e)) = Tunnel::on_tcp_connect_request(
+                            context, forwarder, request, forwarder_auth, update_metrics,
+                        ).await {
+                            log_id!(debug, request_id, "{}: {}", message, e);
+                            if let Some(request) = request {
+                                let _ = request.fail_request(e);
+                            }
+                        }
                     }
                     Ok(Some(AuthorizedRequest::DatagramMultiplexer(request))) => {
-                        Tunnel::on_datagram_mux_request(context, forwarder, request, update_metrics).await
+                        if let Err((message, e)) = Tunnel::on_datagram_mux_request(
+                            context, forwarder, request, forwarder_auth, update_metrics,
+                        ).await {
+                            log_id!(debug, request_id, "{}: {}", message, e);
+                        }
                     }
                     Err(e) => {
                         log_id!(debug, request_id, "Failed to complete request: {}", e);
@@ -129,27 +153,31 @@ impl Tunnel {
         context: Arc<core::Context>,
         forwarder: Arc<Mutex<Box<dyn Forwarder>>>,
         request: Box<dyn PendingTcpConnectRequest>,
+        forwarder_auth: Option<authentication::Source<'static>>,
         update_metrics: F,
-    ) {
+    ) -> Result<(), (Option<Box<dyn PendingTcpConnectRequest>>, &'static str, io::Error)> {
         let request_id = request.id();
         let destination = match request.destination() {
             Ok(d) => d,
-            Err(e) => {
-                log_id!(debug, request_id, "Failed to get destination: {}", e);
-                let _ = request.fail_request(e);
-                return;
-            }
+            Err(e) => return Err((Some(request), "Failed to get destination", e)),
         };
 
-        log_id!(trace, request_id, "Connecting to peer: {:?}", destination);
+        let meta = forwarder::TcpConnectionMeta {
+            client_address: match request.client_address() {
+                Ok(x) => x,
+                Err(e) => return Err((Some(request), "Failed to get client address", e)),
+            },
+            destination,
+            auth: forwarder_auth,
+            client_platform: request.client_platform(),
+            app_name: request.app_name(),
+        };
+        log_id!(trace, request_id, "Connecting to peer: {:?}", meta);
+
         let connector =
-            match forwarder.lock().unwrap().tcp_connector(request_id.clone(), destination) {
+            match forwarder.lock().unwrap().tcp_connector(request_id.clone(), meta) {
                 Ok(c) => c,
-                Err(e) => {
-                    log_id!(debug, request_id, "Failed to start connection: {}", e);
-                    let _ = request.fail_request(e);
-                    return;
-                }
+                Err(e) => return Err((Some(request), "Failed to start connection", e)),
             };
 
         let (fwd_rx, fwd_tx) =
@@ -157,21 +185,14 @@ impl Tunnel {
                 .unwrap_or_else(|_| Err(io::Error::from(ErrorKind::TimedOut)))
             {
                 Ok(x) => x,
-                Err(e) => {
-                    log_id!(debug, request_id, "Connection to peer failed: {}", e);
-                    let _ = request.fail_request(e);
-                    return;
-                }
+                Err(e) => return Err((Some(request), "Connection to peer failed", e)),
             };
 
         log_id!(trace, request_id, "Successfully connected to peer");
         let (dstr_rx, dstr_tx) =
             match request.succeed_request() {
                 Ok(x) => x,
-                Err(e) => {
-                    log_id!(debug, request_id, "Failed to complete request: {}", e);
-                    return;
-                }
+                Err(e) => return Err((None, "Failed to complete request", e)),
             };
 
         let mut pipe = DuplexPipe::new(
@@ -181,8 +202,11 @@ impl Tunnel {
         );
 
         match pipe.exchange(context.settings.tcp_connections_timeout).await {
-            Ok(_) => { log_id!(trace, request_id, "Both ends closed gracefully"); }
-            Err(e) => { log_id!(debug, request_id, "Error on pipe: {}", e); }
+            Ok(_) => {
+                log_id!(trace, request_id, "Both ends closed gracefully");
+                Ok(())
+            }
+            Err(e) => Err((None, "Error on pipe", e)),
         }
     }
 
@@ -190,18 +214,28 @@ impl Tunnel {
         context: Arc<core::Context>,
         forwarder: Arc<Mutex<Box<dyn Forwarder>>>,
         request: Box<dyn PendingDatagramMultiplexerRequest>,
+        forwarder_auth: Option<authentication::Source<'static>>,
         update_metrics: F,
-    ) {
+    ) -> Result<(), (&'static str, io::Error)> {
         let request_id = request.id();
+        let client_address = match request.client_address() {
+            Ok(x) => x,
+            Err(e) => return Err(("Failed to get client address", e)),
+        };
+        let client_platform = request.client_platform();
         let mut pipe: Box<dyn datagram_pipe::DuplexPipe> = match request.succeed_request() {
             Ok(downstream::DatagramPipeHalves::Udp(dstr_source, dstr_sink)) => {
+                let meta = forwarder::UdpMultiplexerMeta {
+                    client_address,
+                    auth: forwarder_auth,
+                    client_platform,
+                };
                 let (fwd_shared, fwd_source, fwd_sink) =
-                    match forwarder.lock().unwrap().make_udp_datagram_multiplexer(request_id.clone()) {
+                    match forwarder.lock().unwrap()
+                        .make_udp_datagram_multiplexer(request_id.clone(), meta)
+                    {
                         Ok(x) => x,
-                        Err(e) => {
-                            log_id!(debug, request_id, "Failed to create datagram multiplexer: {}", e);
-                            return;
-                        }
+                        Err(e) => return Err(("Failed to create datagram multiplexer", e)),
                     };
 
                 Box::new(udp_pipe::DuplexPipe::new(
@@ -215,10 +249,7 @@ impl Tunnel {
                 let (fwd_source, fwd_sink) =
                     match forwarder.lock().unwrap().make_icmp_datagram_multiplexer(request_id.clone()) {
                         Ok(x) => x,
-                        Err(e) => {
-                            log_id!(debug, request_id, "Failed to create datagram multiplexer: {}", e);
-                            return;
-                        }
+                        Err(e) => return Err(("Failed to create datagram multiplexer", e)),
                     };
 
                 Box::new(datagram_pipe::GenericDuplexPipe::new(
@@ -235,15 +266,15 @@ impl Tunnel {
                     update_metrics,
                 ))
             }
-            Err(e) => {
-                log_id!(debug, request_id, "Failed to respond for datagram multiplexer request: {}", e);
-                return;
-            }
+            Err(e) => return Err(("Failed to respond for datagram multiplexer request", e)),
         };
 
         match pipe.exchange().await {
-            Ok(_) => log_id!(trace, request_id, "Datagram multiplexer gracefully closed"),
-            Err(e) => log_id!(debug, request_id, "Datagram multiplexer closed with error: {}", e),
+            Ok(_) => {
+                log_id!(trace, request_id, "Datagram multiplexer gracefully closed");
+                Ok(())
+            },
+            Err(e) => Err(("Datagram multiplexer closed with error", e)),
         }
     }
 }

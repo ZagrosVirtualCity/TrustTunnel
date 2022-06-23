@@ -2,7 +2,6 @@ use std::io;
 use std::sync::Arc;
 use crate::{core, datagram_pipe, downstream, forwarder, log_utils};
 use crate::forwarder::Forwarder;
-use crate::net_utils::TcpDestination;
 use crate::tcp_forwarder::TcpForwarder;
 use crate::udp_forwarder::UdpForwarder;
 
@@ -28,18 +27,24 @@ impl DirectForwarder {
 
 impl Forwarder for DirectForwarder {
     fn tcp_connector(
-        &mut self, id: log_utils::IdChain<u64>, destination: TcpDestination
+        &mut self,
+        id: log_utils::IdChain<u64>,
+        meta: forwarder::TcpConnectionMeta,
     ) -> io::Result<Box<dyn forwarder::TcpConnector>> {
-        self.tcp_forwarder.connect_tcp(id, destination)
+        assert!(meta.auth.is_none());
+        self.tcp_forwarder.connect_tcp(id, meta.destination)
     }
 
     fn make_udp_datagram_multiplexer(
-        &mut self, id: log_utils::IdChain<u64>
+        &mut self,
+        id: log_utils::IdChain<u64>,
+        meta: forwarder::UdpMultiplexerMeta,
     ) -> io::Result<(
         Arc<dyn forwarder::UdpDatagramPipeShared>,
         Box<dyn datagram_pipe::Source<Output = forwarder::UdpDatagramReadStatus>>,
         Box<dyn datagram_pipe::Sink<Input = downstream::UdpDatagram>>,
     )> {
+        assert!(meta.auth.is_none());
         self.udp_forwarder.make_multiplexer(id)
     }
 

@@ -1,12 +1,13 @@
 use std::io;
 use std::io::ErrorKind;
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
-use crate::{datagram_pipe, http_codec, log_id, log_utils, pipe, utils};
+use crate::{datagram_pipe, http_codec, log_id, log_utils, net_utils, pipe, utils};
 use crate::protocol_selector::Protocol;
 use crate::http_codec::{RequestHeaders, ResponseHeaders};
 use crate::settings::Settings;
@@ -57,6 +58,7 @@ struct Stream {
 
 struct StreamSource {
     request: RequestHeaders,
+    client_address: SocketAddr,
     /// Receives messages from [`Http1Codec.upload_tx`]
     upload_rx: mpsc::Receiver<Option<Bytes>>,
     id: log_utils::IdChain<u64>,
@@ -76,7 +78,9 @@ enum RequestStatus {
 }
 
 
-impl<IO> Http1Codec<IO> {
+impl<IO> Http1Codec<IO>
+    where IO: net_utils::PeerAddr
+{
     pub fn new(
         _core_settings: Arc<Settings>,
         transport_stream: IO,
@@ -134,6 +138,7 @@ impl<IO> Http1Codec<IO> {
                 Ok(RequestStatus::Complete(Box::new(Stream {
                     source: StreamSource {
                         request,
+                        client_address: self.transport_stream.peer_addr()?,
                         upload_rx: self.upload_rx.take().unwrap(),
                         id: id.clone(),
                     },
@@ -149,7 +154,9 @@ impl<IO> Http1Codec<IO> {
 }
 
 #[async_trait]
-impl<IO: AsyncRead + AsyncWrite + Send + Unpin> http_codec::HttpCodec for Http1Codec<IO> {
+impl<IO> http_codec::HttpCodec for Http1Codec<IO>
+    where IO: AsyncRead + AsyncWrite + Send + Unpin + net_utils::PeerAddr
+{
     async fn listen(&mut self) -> io::Result<Option<Box<dyn http_codec::Stream>>> {
         loop {
             let wait_read = async {
@@ -235,6 +242,10 @@ impl http_codec::PendingRequest for StreamSource {
 
     fn request(&self) -> &RequestHeaders {
         &self.request
+    }
+
+    fn client_address(&self) -> io::Result<SocketAddr> {
+        Ok(self.client_address)
     }
 
     fn finalize(self: Box<Self>) -> Box<dyn pipe::Source> {

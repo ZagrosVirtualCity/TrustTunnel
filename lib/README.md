@@ -72,9 +72,10 @@ implementation (see the `authentication.Authenticator` trait), or use one of the
 provided by the library:
 * `authentication.DummyAuthenticator` - authenticates any request
 * `authentication.file_based.FileBasedAuthenticator` - authenticates a request basing on
-  the file containing credentials
+  the file containing credentials (see [here](#file-based-authenticator))
 * `authentication.radius.RadiusAuthenticator` - delegates authentication to an authenticator
-  communicating with it by the RADIUS protocol
+  communicating with it by the RADIUS protocol (see [here](#radius-authenticator))
+* SOCKS5 authentication - delegates authentication to the SOCKS5 forwarder (see [here](#socks5-authenticator))
 
 **Please note**, that the first 2 are very simple authenticator implementations which are intended
 mostly for testing purposes and do not respect network security practices.
@@ -122,6 +123,32 @@ Depending on the client-side authentication way, the `user_name` and `password` 
 
 The endpoint caches the authentication status and repeats the procedure for the client after
 the cache TTL (see `RadiusAuthenticatorSettings.cache_ttl`).
+
+##### SOCKS5 authenticator
+
+Perform authentication according to the [RFC 1929](https://datatracker.ietf.org/doc/html/rfc1929).
+Depending on the client-side authentication way, the username and password are as follows:
+* [SNI authentication](#sni-authentication):
+  * username = `sni@<hash[0..6]>@<client_address>@<client_platform>@<app_name>[@]`
+    * `<hash[0..6]>` - the first 6 characters of the SNI
+    * `<client_address>` - the address of a VPN client sent the request (e.g. `54.243.99.69:12345`)
+    * `<client_platform>` - the name of a platform of the VPN client (_may be absent_,
+      e.g, `uname@54.243.99.69:12345@@curl`)
+    * `<app_name>` - the name of an application initiated the request (_may be absent_,
+      e.g, `uname@54.243.99.69:12345@Linux@`)
+
+  * `password` = `hash` - corresponds to `hash`, as in [SNI authentication](#sni-authentication)
+
+* [Proxy authentication](#proxy-authentication):
+  * username = `<user_name>@<client_address>@<client_platform>@<app_name>[@]`
+    * `<user_name>` - corresponds to `token`, as in [Proxy authentication](#proxy-authentication)
+    * `<client_address>` - the address of a VPN client sent the request (e.g. `54.243.99.69:12345`)
+    * `<client_platform>` - the name of a platform of the VPN client (_may be absent_,
+      e.g, `uname@54.243.99.69:12345@@curl`)
+    * `<app_name>` - the name of an application initiated the request (_may be absent_,
+      e.g, `uname@54.243.99.69:12345@Linux@`)
+
+  * password corresponds to `credentials`, as in [Proxy authentication](#proxy-authentication)
 
 ### Metrics collecting
 

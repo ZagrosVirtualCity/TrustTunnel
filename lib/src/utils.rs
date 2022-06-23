@@ -7,6 +7,13 @@ use crate::authentication;
 
 
 pub(crate) const SHA1_DIGEST_SIZE: usize = 20;
+const PREDEFINED_CLIENTS_PLATFORMS: [&str; 5] = [
+    "windows",
+    "ios",
+    "mac",
+    "android",
+    "linux",
+];
 
 
 pub(crate) fn hex_dump(buf: &[u8]) -> String {
@@ -43,4 +50,11 @@ pub(crate) fn scan_sni_authentication<'a>(sni: &'a str, hostname: &str) -> Optio
     sni.strip_suffix(hostname)
         .and_then(|seek| seek.strip_suffix('.'))
         .map(|x| authentication::Source::Sni(x.into()))
+}
+
+pub(crate) fn is_predefined_platform(str: &str) -> bool {
+    let str = str.to_lowercase();
+    PREDEFINED_CLIENTS_PLATFORMS.iter()
+        .find(|i| str.eq(*i))
+        .is_some()
 }

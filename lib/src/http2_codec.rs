@@ -1,5 +1,6 @@
 use std::io;
 use std::io::ErrorKind;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -9,7 +10,7 @@ use h2::{Reason, RecvStream, SendStream, server};
 use h2::server::{Connection, Handshake, SendResponse};
 use tokio::io::{AsyncRead, AsyncWrite};
 use crate::http_codec::{HttpCodec, RequestHeaders, ResponseHeaders};
-use crate::{datagram_pipe, http_codec, log_id, log_utils, pipe};
+use crate::{datagram_pipe, http_codec, log_id, log_utils, net_utils, pipe};
 use crate::protocol_selector::Protocol;
 use crate::settings::{ListenProtocolSettings, Settings};
 
@@ -18,6 +19,7 @@ pub(crate) struct Http2Codec<IO> {
     state: State<IO>,
     parent_id_chain: log_utils::IdChain<u64>,
     next_conn_id: std::ops::RangeFrom<u64>,
+    client_address: SocketAddr,
 }
 
 enum State<IO> {
@@ -34,6 +36,7 @@ struct Stream {
 struct Request {
     request: RequestHeaders,
     rx: RecvStream,
+    client_address: SocketAddr,
     id: log_utils::IdChain<u64>,
 }
 
@@ -53,12 +56,14 @@ struct RespondStream {
 }
 
 
-impl<IO: AsyncRead + AsyncWrite + Unpin> Http2Codec<IO> {
+impl<IO> Http2Codec<IO>
+    where IO: AsyncRead + AsyncWrite + Unpin + net_utils::PeerAddr
+{
     pub fn new(
         core_settings: Arc<Settings>,
         transport_stream: IO,
         parent_id_chain: log_utils::IdChain<u64>,
-    ) -> Self {
+    ) -> io::Result<Self> {
         let http2_settings = core_settings.listen_protocols.iter()
             .find(|x| matches!(x, ListenProtocolSettings::Http2(_)))
             .map(|x| match x {
@@ -67,7 +72,9 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> Http2Codec<IO> {
             })
             .unwrap();
 
-        Self {
+        let client_address = transport_stream.peer_addr()?;
+
+        Ok(Self {
             state: State::Handshake(
                 server::Builder::new()
                     .initial_connection_window_size(http2_settings.initial_connection_window_size)
@@ -79,7 +86,8 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> Http2Codec<IO> {
             ),
             parent_id_chain,
             next_conn_id: 0..,
-        }
+            client_address,
+        })
     }
 }
 
@@ -111,6 +119,7 @@ impl<IO: AsyncRead + AsyncWrite + Send + Unpin> HttpCodec for Http2Codec<IO> {
                         request: Request {
                             request,
                             rx,
+                            client_address: self.client_address,
                             id: id.clone(),
                         },
                         respond: Respond {
@@ -170,6 +179,10 @@ impl http_codec::PendingRequest for Request {
 
     fn request(&self) -> &RequestHeaders {
         &self.request
+    }
+
+    fn client_address(&self) -> io::Result<SocketAddr> {
+        Ok(self.client_address)
     }
 
     fn finalize(self: Box<Self>) -> Box<dyn pipe::Source> {

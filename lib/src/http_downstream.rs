@@ -1,6 +1,7 @@
 use std::collections::LinkedList;
 use std::io;
 use std::io::ErrorKind;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use http::StatusCode;
 use async_trait::async_trait;
@@ -173,6 +174,10 @@ impl downstream::AuthorizationRequest for TcpConnection {
 }
 
 impl downstream::PendingTcpConnectRequest for TcpConnection {
+    fn client_address(&self) -> io::Result<SocketAddr> {
+        self.stream.request().client_address()
+    }
+
     fn destination(&self) -> io::Result<TcpDestination> {
         let request = self.stream.request();
         let authority = request.authority()?;
@@ -193,6 +198,14 @@ impl downstream::PendingTcpConnectRequest for TcpConnection {
                 TcpDestination::HostName((authority.host().to_string(), port))
             },
         })
+    }
+
+    fn client_platform(&self) -> Option<String> {
+        self.stream.request().client_platform()
+    }
+
+    fn app_name(&self) -> Option<String> {
+        self.stream.request().app_name()
     }
 
     fn succeed_request(self: Box<Self>) -> io::Result<(Box<dyn pipe::Source>, Box<dyn pipe::Sink>)> {
@@ -254,6 +267,14 @@ impl downstream::AuthorizationRequest for DatagramMultiplexer {
 }
 
 impl downstream::PendingDatagramMultiplexerRequest for DatagramMultiplexer {
+    fn client_address(&self) -> io::Result<SocketAddr> {
+        self.stream.request().client_address()
+    }
+
+    fn client_platform(&self) -> Option<String> {
+        self.stream.request().client_platform()
+    }
+
     fn succeed_request(self: Box<Self>) -> io::Result<downstream::DatagramPipeHalves> {
         let authority = self.stream.request().authority()?.to_string();
         let (source, sink) = self.stream.split();

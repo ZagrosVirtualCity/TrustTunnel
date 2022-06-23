@@ -1,10 +1,11 @@
 use std::io;
 use std::io::ErrorKind;
+use std::net::SocketAddr;
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::{Response, StatusCode};
 use http::uri::Authority;
-use crate::{authentication, datagram_pipe, log_utils, pipe};
+use crate::{authentication, datagram_pipe, log_utils, pipe, utils};
 use crate::protocol_selector::Protocol;
 
 
@@ -46,6 +47,9 @@ pub(crate) trait PendingRequest: Send {
             .into_parts().0
     }
 
+    /// Get the address of a VPN client made the connection request
+    fn client_address(&self) -> io::Result<SocketAddr>;
+
     /// Get the authorization info if some
     fn auth_info(&self) -> io::Result<Option<authentication::Source>> {
         let header = match self.request().headers.get("proxy-authorization") {
@@ -70,6 +74,45 @@ pub(crate) trait PendingRequest: Send {
                 ErrorKind::Other,
                 format!("Authority not found: {:?}", self.request())
             ))
+    }
+
+    /// Get the client platform name.
+    /// Treat the first word of the User-Agent as a platform name in case it meets
+    /// the [`utils::is_predefined_platform`] condition.
+    fn client_platform(&self) -> Option<String> {
+        self.request().headers
+            .get(http::header::USER_AGENT)
+            .and_then(|x|
+                x.to_str().ok()
+                    .map(str::trim_start)
+                    .and_then(|x| x.splitn(2, ' ').next())
+                    .and_then(|x| utils::is_predefined_platform(x).then(|| x))
+                    .map(String::from)
+            )
+    }
+
+    /// Get the application name.
+    /// In case the first word of the User-Agent meets the
+    /// [`utils::is_predefined_platform`] condition, treat the rest of the value as
+    /// an application name. Otherwise, treat the whole User-Agent value as
+    /// an application name.
+    fn app_name(&self) -> Option<String> {
+        self.request().headers
+            .get(http::header::USER_AGENT)
+            .and_then(|x|
+                x.to_str().ok()
+                    .map(str::trim_start)
+                    .and_then(|x| {
+                        let mut split = x.splitn(2, ' ');
+                        if split.next().map_or(false, |x| utils::is_predefined_platform(x)) {
+                            split.next()
+                        } else {
+                            Some(x)
+                        }
+                    })
+                    .map(str::trim)
+                    .map(String::from)
+            )
     }
 
     /// Turn the pending request into the [`pipe::Source`] object

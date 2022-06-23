@@ -39,6 +39,24 @@ pub(crate) enum TcpDestination {
     HostName(HostnamePort),
 }
 
+pub(crate) trait PeerAddr {
+    fn peer_addr(&self) -> io::Result<SocketAddr>;
+}
+
+impl PeerAddr for tokio::net::TcpStream {
+    fn peer_addr(&self) -> io::Result<SocketAddr> {
+        self.peer_addr()
+    }
+}
+
+impl<IO> PeerAddr for tokio_rustls::server::TlsStream<IO>
+    where IO: PeerAddr
+{
+    fn peer_addr(&self) -> io::Result<SocketAddr> {
+        self.get_ref().0.peer_addr()
+    }
+}
+
 pub(crate) fn make_udp_socket(is_v4: bool) -> io::Result<UdpSocket> {
     if is_v4 {
         UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
