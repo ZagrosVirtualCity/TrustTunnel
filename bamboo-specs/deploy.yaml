@@ -23,10 +23,12 @@ stages:
 Build on Linux:
   key: BL
   docker:
-    image: adguard/core-libs:1.9
+    image: adguard/core-libs:1.10
     volumes:
       ${bamboo.working.directory}: ${bamboo.working.directory}
       ${bamboo.tmp.directory}: ${bamboo.tmp.directory}
+      ${bamboo.git.cache.directory}: ${bamboo.git.cache.directory}
+      ${system.HOME}/.ssh: /root/.ssh
     docker-run-arguments: [ ]
   tasks:
     - !include docker-clean.yaml
@@ -75,6 +77,14 @@ Build on macOS:
 
 Deploy artifacts:
   key: DA
+  docker:
+    image: adguard/core-libs:1.10
+    volumes:
+      ${bamboo.working.directory}: ${bamboo.working.directory}
+      ${bamboo.tmp.directory}: ${bamboo.tmp.directory}
+      ${bamboo.git.cache.directory}: ${bamboo.git.cache.directory}
+      ${system.HOME}/.ssh: /root/.ssh
+    docker-run-arguments: [ ]
   tasks:
     - checkout:
         description: Checkout Default Repository
@@ -100,9 +110,11 @@ Deploy artifacts:
               git reset
               git tag v$VERSION || true
               git push origin v$VERSION
+              ;;
             *)
               ART_VER="${ART_VER}-snapshot"
               ART_URL=${bamboo.artifactoryAdguardMavenSnapshotsUrl}
+              ;;
             esac
             
             # Deploy to Maven
@@ -130,7 +142,7 @@ Deploy artifacts:
               -Durl=$ART_URL
             rm settings.xml
   requirements:
-    - macOS 11.0 or later
+    - adg-privileged-docker
   artifact-subscriptions:
     - artifact: Build result Linux
       destination: vpn-endpoint-build-results
