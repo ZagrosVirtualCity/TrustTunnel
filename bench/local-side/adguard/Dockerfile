@@ -24,7 +24,7 @@ RUN arch=$(arch | sed s/aarch64/arm64/ | sed s/x86_64/amd64/) && \
     rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tar.gz && rm /tmp/go.tar.gz
 ENV PATH="/usr/lib/llvm-$LLVM_MAJOR_VER/bin:/usr/local/go/bin:$PATH"
 
-COPY bootstrap_conan_deps.py \
+COPY $VPN_LIBS_DIR/scripts/bootstrap_conan_deps.py \
     $VPN_LIBS_DIR/conanfile.py \
     $VPN_LIBS_DIR/conandata.yml \
     $VPN_LIBS_DIR/conan/profiles/linux-clang \
