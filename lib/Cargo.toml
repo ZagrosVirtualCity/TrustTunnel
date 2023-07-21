@@ -16,7 +16,7 @@ cc = "=1.0.79"
 async-trait = "=0.1.68"
 base64 = "=0.21.2"
 bytes = "=1.4.0"
-chrono = "=0.4.26"
+chrono = { version = "=0.4.26", default-features = false, features = ["clock"] }
 dynfmt = { version = "=0.1.5", features = ["curly"], default-features = false }
 futures = "=0.3.28"
 h2 = "=0.3.20"

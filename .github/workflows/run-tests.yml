@@ -1,0 +1,42 @@
+name: Run tests
+
+env:
+  RUST_CHANNEL: 1.67
+
+on:
+  push:
+    branches:
+      - "*"
+    paths-ignore:
+      - '**/README.md'
+      - 'bamboo-specs/**'
+      - 'scripts/**'
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+jobs:
+  tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    if: "!startsWith(github.event.head_commit.message, 'skipci:')"
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v3
+
+      - name: Cargo cache
+        uses: actions/cache@v3
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run tests
+        run: |
+          cargo test --workspace

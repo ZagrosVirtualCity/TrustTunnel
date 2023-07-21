@@ -1,0 +1,25 @@
+name: Security audit
+
+on:
+  push:
+    branches:
+      - "*"
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+jobs:
+  security-audit:
+    permissions:
+      checks: write  # for rustsec/audit-check to create check
+      contents: read  # for actions/checkout to fetch code
+    runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, 'skipci:')"
+    steps:
+      - uses: actions/checkout@v3
+      - uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

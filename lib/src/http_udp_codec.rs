@@ -233,9 +233,10 @@ impl http_datagram_codec::Encoder for Encoder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum RecvState {
     /// Waiting for the `Length` field
+    #[default]
     Length,
     /// Waiting for the header (without app name) completion
     FixedHeader,
@@ -245,10 +246,6 @@ enum RecvState {
     Payload(usize),
     /// Dropping the packet for some reason
     Dropping(usize),
-}
-
-impl Default for RecvState {
-    fn default() -> Self { RecvState::Length }
 }
 
 #[cfg(test)]

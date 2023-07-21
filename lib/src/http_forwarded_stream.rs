@@ -534,7 +534,7 @@ impl SinkWaitingResponse {
                 (x, _) if drop_headers.contains(x) => (),
                 ("connection", _) => if let Ok(x) = std::str::from_utf8(h.value) {
                     drop_headers.extend(
-                        x.split(',').into_iter()
+                        x.split(',')
                             .filter(|x| *x != "close")
                             .map(|x| x.trim().to_lowercase())
                     );

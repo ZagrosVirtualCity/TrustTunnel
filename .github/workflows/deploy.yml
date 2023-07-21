@@ -1,0 +1,67 @@
+name: Deploy
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
+  pack-sources:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Prepare changelog
+        id: changelog
+        run: |
+          LAST_TAG="${GITHUB_REF#refs/*/}"
+          PREV_TAG=$(git describe --tags --abbrev=0 ${LAST_TAG}^)
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "CHANGELOG<<$EOF" >> "$GITHUB_ENV"
+          ./scripts/extract_changelog.py "$PREV_TAG" "$LAST_TAG" >> "$GITHUB_ENV"
+          echo "$EOF" >> "$GITHUB_ENV"
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body: ${{ env.CHANGELOG }}
+
+# TODO: check with public repository
+#  notify:
+#    needs: pack-sources
+#
+#    # Secrets are not passed to workflows that are triggered by a pull request
+#    # from a fork.
+#    #
+#    # Use always() to signal to the runner that this job must run even if the
+#    # previous ones failed.
+#    if:
+#      ${{
+#        always() &&
+#        github.repository_owner == 'AdguardTeam' &&
+#        (
+#          github.event_name == 'push' ||
+#          github.event.pull_request.head.repo.full_name == github.repository
+#        )
+#      }}
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Conclusion
+#        uses: technote-space/workflow-conclusion-action@v1
+#      - name: Send Slack notification
+#        uses: 8398a7/action-slack@v3
+#        with:
+#          status: ${{ env.WORKFLOW_CONCLUSION }}
+#          fields: repo, message, commit, author, workflow
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

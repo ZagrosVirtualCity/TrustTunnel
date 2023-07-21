@@ -115,7 +115,7 @@ impl<F: Fn(pipe::SimplexDirection, usize) + Send + Sync> LeftPipe<F> {
 impl<F: Fn(pipe::SimplexDirection, usize) + Send + Sync> RightPipe<F> {
     async fn exchange(&mut self) -> io::Result<()> {
         loop {
-            let datagram = match { let x = self.source.read().await?; x } {
+            let datagram = match self.source.read().await? {
                 forwarder::UdpDatagramReadStatus::Read(x) => x,
                 forwarder::UdpDatagramReadStatus::UdpClose(meta, e) => {
                     if let Some(c) = self.shared.udp_connections.lock().unwrap().remove(&meta) {

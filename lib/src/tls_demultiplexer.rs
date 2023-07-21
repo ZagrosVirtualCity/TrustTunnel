@@ -260,7 +260,7 @@ impl TlsDemux {
             None if self.tunnel_protocols.contains(&DEFAULT_PROTOCOL)
                 && advertised_alpn.clone().peekable().peek().is_none()
             => Ok(DEFAULT_PROTOCOL),
-            None => return Err(format!(
+            None => Err(format!(
                 "Unexpected ALPN on reverse proxy connection {:?}",
                 advertised_alpn.map(utils::hex_dump).collect::<Vec<_>>()
             )),

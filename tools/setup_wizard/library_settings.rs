@@ -34,7 +34,7 @@ pub fn build() -> Built {
 }
 
 fn build_authenticator() -> String {
-    let path = if crate::get_mode() != Mode::NonInteractive
+    if crate::get_mode() != Mode::NonInteractive
         && check_file_exists(".", DEFAULT_CREDENTIALS_PATH)
         && ask_for_agreement(&format!("Reuse the existing credentials file: {DEFAULT_CREDENTIALS_PATH}?"))
     {
@@ -54,9 +54,7 @@ fn build_authenticator() -> String {
         }
 
         path
-    };
-
-    path
+    }
 }
 
 fn build_user_list() -> Vec<(String, String)> {

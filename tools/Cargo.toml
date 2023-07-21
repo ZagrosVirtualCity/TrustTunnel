@@ -9,7 +9,7 @@ name = "setup_wizard"
 path = "setup_wizard/main.rs"
 
 [dependencies]
-chrono = "=0.4.26"
+chrono = { version = "=0.4.26", default-features = false, features = ["clock"] }
 clap = "=4.3.8"
 dialoguer = "=0.10.4"
 lazy_static = "=1.4.0"

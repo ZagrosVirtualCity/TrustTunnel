@@ -1,0 +1,30 @@
+name: Clippy check
+
+on:
+  push:
+    branches:
+      - "*"
+    paths-ignore:
+      - '**/README.md'
+      - 'bamboo-specs/**'
+      - 'scripts/**'
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+jobs:
+  clippy-check:
+    runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, 'skipci:')"
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v3
+
+      - name: Install clippy
+        run: rustup component add clippy
+
+      - name: Run clippy
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features
