@@ -17,7 +17,7 @@ stages:
 Test on Linux:
   key: TL
   docker:
-    image: adguard/core-libs:2.1
+    image: adguard/core-libs:2.6
     volumes:
       ${bamboo.working.directory}: ${bamboo.working.directory}
       ${bamboo.tmp.directory}: ${bamboo.tmp.directory}

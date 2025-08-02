@@ -9,14 +9,14 @@ name = "setup_wizard"
 path = "setup_wizard/main.rs"
 
 [dependencies]
-chrono = { version = "=0.4.26", default-features = false, features = ["clock"] }
-clap = "=4.3.8"
-dialoguer = "=0.10.4"
-lazy_static = "=1.4.0"
-once_cell = "=1.18.0"
-rcgen = "=0.10.0"
-serde = "=1.0.164"
-toml = "=0.7.4"
-toml_edit = "=0.19.10"
+chrono = { version = "0.4.26", default-features = false, features = ["clock"] }
+clap = "4.3.8"
+dialoguer = "0.10.4"
+lazy_static = "1.4.0"
+once_cell = "1.18.0"
+rcgen = "0.10.0"
+serde = "1.0.164"
+toml = "0.7.4"
+toml_edit = "0.19.10"
 vpn_libs_endpoint = { version = "0.1", path = "../lib", features = ["rt_doc"] }
-x509-parser = "=0.15.0"
+x509-parser = "0.15.0"

@@ -303,7 +303,7 @@ mod tests {
     fn check_protocol_selection(listen_protocols: ListenProtocolSettings, advertised_protocols: Vec<Protocol>)
                                 -> Result<ConnectionMeta, String>
     {
-        const TEST_HOST: &str = "example.com";
+        const TEST_HOST: &str = "httpbin.agrd.dev";
 
         let mut settings = Settings::default();
         settings.listen_protocols = listen_protocols;
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn reverse_proxy_protocol_selection() {
-        const TEST_HOST: &str = "example.com";
+        const TEST_HOST: &str = "httpbin.agrd.dev";
 
         let mut settings = Settings::default();
         settings.reverse_proxy = Some(dummy_reverse_proxy_settings());
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn ping_protocol_selection() {
-        const TEST_HOST: &str = "example.com";
+        const TEST_HOST: &str = "httpbin.agrd.dev";
 
         let mut tls_settings = TlsHostsSettings::default();
         tls_settings.ping_hosts = vec![make_tls_host(TEST_HOST.to_string())];
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn speedtest_protocol_selection() {
-        const TEST_HOST: &str = "example.com";
+        const TEST_HOST: &str = "httpbin.agrd.dev";
 
         let mut tls_settings = TlsHostsSettings::default();
         tls_settings.speedtest_hosts = vec![make_tls_host(TEST_HOST.to_string())];

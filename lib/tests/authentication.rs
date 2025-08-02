@@ -169,7 +169,7 @@ async fn do_connect_request(
         let mut rr = Request::builder()
             .version(http::Version::HTTP_11)
             .method(http::Method::CONNECT)
-            .uri("https://example.com:443/");
+            .uri("https://httpbin.agrd.dev:443/");
 
         if let Some(x) = proxy_auth {
             rr = rr.header(
