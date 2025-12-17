@@ -143,7 +143,7 @@ Deploy artifacts:
             # TODO: change to bamboo_githubPublicRepoPassword when repo become public
             gh config set -h github.com oauth_token "${bamboo_githubPrivateRepoPassword}" || exit 1
             gh release delete -y --cleanup-tag ${TAG} || true
-            gh release create ${TAG} -p -t "${TAG}" -n "See [CHANGELOG.md](${CHANGELOG_URL}) for the list of changes."
+            gh release create ${TAG} -t "${TAG}" -n "See [CHANGELOG.md](${CHANGELOG_URL}) for the list of changes."
             gh release upload ${TAG} ../build_linux/trusttunnel-v${VERSION}-linux-x86_64.tar.gz
             gh release upload ${TAG} ../build_linux/trusttunnel-v${VERSION}-linux-aarch64.tar.gz
   requirements:
