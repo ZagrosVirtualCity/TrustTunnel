@@ -22,12 +22,14 @@
 - [Quick start](#quick-start)
     - [Endpoint setup](#endpoint-setup)
         - [Install the endpoint](#install-the-endpoint)
+        - [Updating the endpoint](#updating-the-endpoint)
         - [TrustTunnel Flutter Client 1.0 Warning](#trusttunnel-flutter-client-10-warning)
         - [Endpoint configuration wizard](#endpoint-configuration-wizard)
         - [Running endpoint](#running-endpoint)
         - [Export client configuration](#export-client-configuration)
     - [Client setup](#client-setup)
         - [Install the client](#install-the-client)
+        - [Updating the client](#updating-the-client)
         - [Client configuration wizard](#client-configuration-wizard)
         - [Running client](#running-client)
 - [See also](#see-also)
@@ -106,9 +108,40 @@ GitHub release for the appropriate system architecture and unpack it to
 `/opt/trusttunnel`. The output directory could be overridden by specifying
 `-o DIR` flag at the end of the command above.
 
+If you want to install a specific version (instead of the latest), use `-V <version>`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TrustTunnel/TrustTunnel/refs/heads/master/scripts/install.sh | sh -s - -V <version>
+```
+
 > [!NOTE]
 > Currently only `linux-x86_64` and `linux-aarch64` architectures are provided
 > for the prebuilt packages.
+
+#### Updating the endpoint
+
+The installation script always installs the latest available version.
+So, to update your installation, run the install command again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TrustTunnel/TrustTunnel/refs/heads/master/scripts/install.sh | sh -s -
+```
+
+This re-runs the installer and replaces the binaries in the installation
+directory (`/opt/trusttunnel` by default, or the directory you specified with `-o DIR`).
+
+> [!NOTE]
+> Don't forget to stop the endpoint before updating:
+>
+> ```bash
+> sudo systemctl stop trusttunnel
+> ```
+>
+> To start the endpoint again after updating:
+>
+> ```bash
+> sudo systemctl start trusttunnel
+> ```
 
 #### TrustTunnel Flutter Client 1.0 Warning
 
@@ -242,6 +275,20 @@ curl -fsSL https://raw.githubusercontent.com/TrustTunnel/TrustTunnelClient/refs/
 ```
 
 The installation script will download the prebuilt package from the latest GitHub release for the appropriate system architecture and unpack it to `/opt/trusttunnel_client`. The output directory could be overridden by specifying `-o DIR` flag at the end of the command above.
+
+#### Updating the client
+
+The installation script always installs the latest available version.
+So, to update your installation, run the install command again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TrustTunnel/TrustTunnelClient/refs/heads/master/scripts/install.sh | sh -s -
+```
+
+> [!NOTE]
+> Don't forget to stop the client before updating (for example, by stopping the running process).
+
+This re-runs the installer and replaces the binaries in the installation directory (`/opt/trusttunnel_client` by default, or the directory you specified with `-o DIR`).
 
 > [!NOTE]
 > Install script supports x86_64, aarch64, armv7, mips and mipsel architectures

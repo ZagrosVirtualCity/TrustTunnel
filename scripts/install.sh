@@ -23,7 +23,7 @@ error_exit() {
 
 # Function usage prints the note about how to use the script.
 usage() {
-  echo 'Usage: install.sh [-o output_dir] [-v] [-h] [-u] [-p archive_path] [-a y|n]' 1>&2
+  echo 'Usage: install.sh [-o output_dir] [-v] [-h] [-u] [-p archive_path] [-V version] [-a y|n]' 1>&2
 }
 
 # Function parse_opts parses the options list and validates it's combinations.
