@@ -1,5 +1,7 @@
 # CHANGELOG
 
+## 0.9.115
+
 - Fixed an issue where client_random_prefix rules didn’t match when Anti-DPI or post-quantum cryptography was enabled.
 
 ## 0.9.114
