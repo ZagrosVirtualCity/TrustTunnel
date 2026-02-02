@@ -177,9 +177,8 @@ pub(crate) fn bind_to_interface(
     // FreeBSD doesn't have SO_BINDTODEVICE (Linux) or IP_BOUND_IF (macOS).
     // We bind the socket to the interface's IP address instead, which achieves
     // the same effect of restricting traffic to that interface.
-    let c_name = CString::new(name).map_err(|_| {
-        io::Error::new(io::ErrorKind::InvalidInput, "invalid interface name")
-    })?;
+    let c_name = CString::new(name)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid interface name"))?;
 
     let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
     // SAFETY: getifaddrs writes to our pointer, which we'll free with freeifaddrs
@@ -198,7 +197,7 @@ pub(crate) fn bind_to_interface(
     let _guard = IfAddrsGuard(ifaddrs);
 
     let mut current = ifaddrs;
-    let mut bind_addr: Option<libc::sockaddr_storage> = None;
+    let mut candidates: Vec<(libc::sockaddr_storage, libc::c_uint)> = Vec::new();
 
     while !current.is_null() {
         // SAFETY: current is not null (checked above) and points to valid ifaddrs from getifaddrs
@@ -229,19 +228,67 @@ pub(crate) fn bind_to_interface(
                         len,
                     );
                 }
-                bind_addr = Some(storage);
-                break;
+                candidates.push((storage, ifa.ifa_flags));
             }
         }
         current = ifa.ifa_next;
     }
+
+    // For IPv4, just take the first address. For IPv6, select by priority.
+    let bind_addr = if family == libc::AF_INET {
+        candidates.into_iter().next().map(|(storage, _)| storage)
+    } else {
+        // IPv6 address selection by priority (highest to lowest):
+        // 1. Global unicast scope temporary addresses
+        // 2. Global unicast scope addresses
+        // 3. ULA temporary addresses (fc00::/7)
+        // 4. ULA addresses (fc00::/7)
+        // 5. Link-local addresses (fe80::/10)
+
+        // FreeBSD IN6_IFF_TEMPORARY flag value
+        const IN6_IFF_TEMPORARY: libc::c_uint = 0x0080;
+
+        candidates
+            .into_iter()
+            .max_by_key(|(storage, flags)| {
+                // SAFETY: storage was created from a valid sockaddr_in6
+                let addr = unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
+                let ip = Ipv6Addr::from(addr.sin6_addr.s6_addr);
+                let segments = ip.segments();
+
+                let is_temporary = (flags & IN6_IFF_TEMPORARY) != 0;
+                let is_global_unicast = is_unicast_global_ipv6(&ip);
+                let is_ula = (segments[0] & 0xfe00) == 0xfc00; // fc00::/7
+                let is_link_local = (segments[0] & 0xffc0) == 0xfe80; // fe80::/10
+
+                // Return priority value (higher is better)
+                if is_global_unicast && is_temporary {
+                    10 // Highest: global unicast temporary
+                } else if is_global_unicast {
+                    9 // Global unicast
+                } else if is_ula && is_temporary {
+                    6 // ULA temporary
+                } else if is_ula {
+                    5 // ULA
+                } else if is_link_local {
+                    1 // Lowest: link-local
+                } else {
+                    0 // Unknown/other
+                }
+            })
+            .map(|(storage, _)| storage)
+    };
 
     let storage = bind_addr.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
             format!(
                 "no {} address found for interface {}",
-                if family == libc::AF_INET { "IPv4" } else { "IPv6" },
+                if family == libc::AF_INET {
+                    "IPv4"
+                } else {
+                    "IPv6"
+                },
                 name
             ),
         )
