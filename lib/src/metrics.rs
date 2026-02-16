@@ -104,7 +104,8 @@ impl Metrics {
     fn collect(&self) -> (String, Bytes) {
         let encoder = prometheus::TextEncoder::new();
 
-        let metric_families = prometheus::gather();
+        let mut metric_families = self._registry.gather();
+        metric_families.extend(prometheus::gather());
         let mut buffer = vec![];
         encoder.encode(&metric_families, &mut buffer).unwrap();
 
