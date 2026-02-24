@@ -18,7 +18,7 @@ if [ -z "$argument_version" ]
 then
   NEW_VERSION=$(increment_version ${VERSION})
 else
-  NEW_VERSION=$1
+  NEW_VERSION=$argument_version
 fi
 
 if ! [[ "${NEW_VERSION}" =~ ^[0-9]\.[0-9]\.[0-9]*$ ]]
