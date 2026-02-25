@@ -3472,7 +3472,7 @@ dependencies = [
 
 [[package]]
 name = "trusttunnel_endpoint"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "clap",
  "console-subscriber",
