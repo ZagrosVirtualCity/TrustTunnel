@@ -1,5 +1,18 @@
 # CHANGELOG
 
+- [Feature] Added per-client connection limits
+    - Optional limits for simultaneous HTTP/2 and HTTP/3 connections per client credentials
+    - Global default limits via `default_max_http2_conns_per_client` and `default_max_http3_conns_per_client` in main config
+    - Per-client overrides via `max_http2_conns` and `max_http3_conns` in credentials file
+    - Applies to both SNI-authenticated and proxy-basic authenticated connections
+    - For proxy-basic: limit enforced on first authenticated request (not idle connections)
+
+  API changes in the library:
+    - Added `max_http2_conns` and `max_http3_conns` fields to `authentication::registry_based::Client`
+    - Added `default_max_http2_conns_per_client` and `default_max_http3_conns_per_client` fields to `settings::Settings`
+    - Added new `connection_limiter` module with `ConnectionLimiter` and `ConnectionGuard` types
+    - Added `connection_limiter` field to `core::Context`
+
 ## 1.0.6
 
 Added support for X25519MLKEM768 post-quantum group.

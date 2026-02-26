@@ -1,4 +1,5 @@
 use crate::authentication::Status;
+use crate::connection_limiter::ConnectionGuard;
 use crate::downstream::{
     Downstream, PendingDatagramMultiplexerRequest, PendingDemultiplexedRequest,
     PendingTcpConnectRequest,
@@ -27,6 +28,10 @@ pub(crate) struct Tunnel {
     downstream: Box<dyn Downstream>,
     forwarder: Arc<Mutex<Box<dyn Forwarder>>>,
     authentication_policy: AuthenticationPolicy<'static>,
+    /// Holds the connection slot acquired for this tunnel.
+    /// Set at construction time for SNI-authenticated connections,
+    /// or lazily on the first authenticated request for proxy-basic connections.
+    connection_guard: Option<ConnectionGuard>,
     id: log_utils::IdChain<u64>,
 }
 
@@ -61,6 +66,7 @@ impl Tunnel {
         downstream: Box<dyn Downstream>,
         forwarder: Box<dyn Forwarder>,
         authentication_policy: AuthenticationPolicy<'static>,
+        connection_guard: Option<ConnectionGuard>,
         id: log_utils::IdChain<u64>,
     ) -> Self {
         Self {
@@ -68,6 +74,7 @@ impl Tunnel {
             downstream,
             forwarder: Arc::new(Mutex::new(forwarder)),
             authentication_policy,
+            connection_guard,
             id,
         }
     }
@@ -128,6 +135,52 @@ impl Tunnel {
                     pipe::SimplexDirection::Outgoing => metrics.add_outbound_bytes(protocol, n),
                 }
             };
+
+            // For proxy-basic connections, lazily acquire the connection slot on the first
+            // authenticated request. This means the limit applies to active tunnels that have
+            // sent at least one request, not to idle connections. This is done before spawning
+            // so the guard lifetime matches the tunnel, not an individual request task.
+            if self.connection_guard.is_none() {
+                if let Some(limiter) = self.context.connection_limiter.as_ref() {
+                    let auth_info = request
+                        .auth_info()
+                        .map(|x| x.map(authentication::Source::into_owned));
+                    let protocol = self.downstream.protocol();
+                    if let Ok(Some(source)) = auth_info {
+                        let authenticated = self
+                            .context
+                            .authenticator
+                            .as_ref()
+                            .map(|a| a.authenticate(&source, &self.id) == Status::Pass)
+                            .unwrap_or(false);
+                        if authenticated {
+                            let creds = match &source {
+                                authentication::Source::ProxyBasic(s) => s.as_ref(),
+                                authentication::Source::Sni(s) => s.as_ref(),
+                            };
+                            match limiter.try_acquire(creds, protocol) {
+                                Some(guard) => {
+                                    self.connection_guard = Some(guard);
+                                }
+                                None => {
+                                    log_id!(
+                                        debug,
+                                        self.id,
+                                        "Connection limit exceeded, closing tunnel"
+                                    );
+                                    request.fail_request(ConnectionError::Authentication(
+                                        "Connection limit exceeded".to_string(),
+                                    ));
+                                    return Err(io::Error::new(
+                                        ErrorKind::PermissionDenied,
+                                        "Connection limit exceeded",
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             tokio::spawn(async move {
                 fn report_fatal_if_too_many_open_files(

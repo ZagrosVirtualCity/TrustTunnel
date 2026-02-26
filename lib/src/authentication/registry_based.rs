@@ -13,6 +13,14 @@ pub struct Client {
     pub username: String,
     /// The client password
     pub password: String,
+    /// Maximum number of simultaneous HTTP/1 and HTTP/2 connections for this client.
+    /// Overrides `default_max_http2_conns_per_client` from the main config.
+    /// If absent, the global default applies (or unlimited if no default is set).
+    pub max_http2_conns: Option<u32>,
+    /// Maximum number of simultaneous HTTP/3 (QUIC) connections for this client.
+    /// Overrides `default_max_http3_conns_per_client` from the main config.
+    /// If absent, the global default applies (or unlimited if no default is set).
+    pub max_http3_conns: Option<u32>,
 }
 
 /// The [`Authenticator`] implementation which checks presence of a client in the list.
@@ -39,11 +47,14 @@ impl Authenticator for RegistryBasedAuthenticator {
         source: &authentication::Source<'_>,
         _log_id: &log_utils::IdChain<u64>,
     ) -> authentication::Status {
-        match &source {
-            authentication::Source::ProxyBasic(str) if self.clients.contains(str) => {
-                authentication::Status::Pass
-            }
-            _ => authentication::Status::Reject,
+        let creds = match &source {
+            authentication::Source::ProxyBasic(str) => str,
+            authentication::Source::Sni(str) => str,
+        };
+        if self.clients.contains(creds.as_ref()) {
+            authentication::Status::Pass
+        } else {
+            authentication::Status::Reject
         }
     }
 }

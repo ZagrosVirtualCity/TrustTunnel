@@ -179,6 +179,21 @@ pub struct Settings {
     #[serde(default = "Settings::default_speedtest_enable")]
     pub(crate) speedtest_enable: bool,
 
+    /// Default maximum number of simultaneous HTTP/1 and HTTP/2 connections per client credentials.
+    /// TrustTunnel clients open 8 HTTP/2 connections by default, so set this to
+    /// `8 * <max_devices>` to limit the number of simultaneously connected devices.
+    /// Can be overridden per-client with `max_http2_conns` in the credentials file.
+    /// If absent, HTTP/2 connections are unlimited.
+    #[serde(default)]
+    pub(crate) default_max_http2_conns_per_client: Option<u32>,
+
+    /// Default maximum number of simultaneous HTTP/3 (QUIC) connections per client credentials.
+    /// TrustTunnel clients open 1 HTTP/3 connection by default.
+    /// Can be overridden per-client with `max_http3_conns` in the credentials file.
+    /// If absent, HTTP/3 connections are unlimited.
+    #[serde(default)]
+    pub(crate) default_max_http3_conns_per_client: Option<u32>,
+
     /// Whether an instance was built through a [`SettingsBuilder`].
     /// This flag is a workaround for absence of the ability to validate
     /// the deserialized structure.
@@ -561,6 +576,8 @@ impl Default for Settings {
             metrics: Default::default(),
             rules_engine: Some(rules::RulesEngine::default_allow()),
             speedtest_enable: false,
+            default_max_http2_conns_per_client: None,
+            default_max_http3_conns_per_client: None,
             built: false,
         }
     }
@@ -815,6 +832,8 @@ impl SettingsBuilder {
                 metrics: Default::default(),
                 rules_engine: Some(rules::RulesEngine::default_allow()),
                 speedtest_enable: Settings::default_speedtest_enable(),
+                default_max_http2_conns_per_client: None,
+                default_max_http3_conns_per_client: None,
                 built: true,
             },
         }
@@ -933,6 +952,18 @@ impl SettingsBuilder {
     /// Set whether speedtest is available
     pub fn speedtest_enable(mut self, x: bool) -> Self {
         self.settings.speedtest_enable = x;
+        self
+    }
+
+    /// Set the default maximum HTTP/2 connections per client credentials
+    pub fn default_max_http2_conns_per_client(mut self, x: Option<u32>) -> Self {
+        self.settings.default_max_http2_conns_per_client = x;
+        self
+    }
+
+    /// Set the default maximum HTTP/3 connections per client credentials
+    pub fn default_max_http3_conns_per_client(mut self, x: Option<u32>) -> Self {
+        self.settings.default_max_http3_conns_per_client = x;
         self
     }
 }
@@ -1433,7 +1464,21 @@ where
                 )));
             }
 
-            Ok(Client { username, password })
+            let max_http2_conns = x
+                .get("max_http2_conns")
+                .and_then(Item::as_integer)
+                .and_then(|v| u32::try_from(v).ok());
+            let max_http3_conns = x
+                .get("max_http3_conns")
+                .and_then(Item::as_integer)
+                .and_then(|v| u32::try_from(v).ok());
+
+            Ok(Client {
+                username,
+                password,
+                max_http2_conns,
+                max_http3_conns,
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
 

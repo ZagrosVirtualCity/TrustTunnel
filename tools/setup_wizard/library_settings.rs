@@ -80,7 +80,12 @@ fn build_credentials() -> (String, Vec<Client>) {
 
     let clients = users
         .into_iter()
-        .map(|(username, password)| Client { username, password })
+        .map(|(username, password)| Client {
+            username,
+            password,
+            max_http2_conns: None,
+            max_http3_conns: None,
+        })
         .collect();
 
     (path, clients)
@@ -97,6 +102,14 @@ fn read_credentials_file(path: &str) -> Option<Vec<Client>> {
                 Some(Client {
                     username: t.get("username")?.as_str()?.to_string(),
                     password: t.get("password")?.as_str()?.to_string(),
+                    max_http2_conns: t
+                        .get("max_http2_conns")
+                        .and_then(|v| v.as_integer())
+                        .map(|v| v as u32),
+                    max_http3_conns: t
+                        .get("max_http3_conns")
+                        .and_then(|v| v.as_integer())
+                        .map(|v| v as u32),
                 })
             })
             .collect(),

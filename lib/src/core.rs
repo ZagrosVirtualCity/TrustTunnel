@@ -1,3 +1,4 @@
+use crate::connection_limiter::ConnectionLimiter;
 use crate::direct_forwarder::DirectForwarder;
 use crate::forwarder::Forwarder;
 use crate::http1_codec::Http1Codec;
@@ -81,6 +82,7 @@ pub(crate) struct Context {
     pub metrics: Arc<Metrics>,
     next_client_id: Arc<AtomicU64>,
     next_tunnel_id: Arc<AtomicU64>,
+    pub connection_limiter: Option<Arc<ConnectionLimiter>>,
 }
 
 impl Context {
@@ -116,6 +118,22 @@ impl Core {
 
         let (fatal_error, _fatal_error_rx) = watch::channel(None);
 
+        let connection_limiter = if settings.default_max_http2_conns_per_client.is_some()
+            || settings.default_max_http3_conns_per_client.is_some()
+            || settings
+                .clients
+                .iter()
+                .any(|c| c.max_http2_conns.is_some() || c.max_http3_conns.is_some())
+        {
+            Some(Arc::new(ConnectionLimiter::new(
+                &settings.clients,
+                settings.default_max_http2_conns_per_client,
+                settings.default_max_http3_conns_per_client,
+            )))
+        } else {
+            None
+        };
+
         Ok(Self {
             context: Arc::new(Context {
                 settings: settings.clone(),
@@ -134,6 +152,7 @@ impl Core {
                 metrics: Metrics::new().map_err(|e| Error::Metrics(e.to_string()))?,
                 next_client_id: Default::default(),
                 next_tunnel_id: Default::default(),
+                connection_limiter,
             }),
         })
     }
@@ -675,21 +694,37 @@ impl Core {
     ) {
         let _metrics_guard = Metrics::client_sessions_counter(context.metrics.clone(), protocol);
 
-        let authentication_policy = match context.authenticator.as_ref().zip(sni_auth_creds) {
-            None => tunnel::AuthenticationPolicy::Default,
-            Some((authenticator, credentials)) => {
-                let auth = authentication::Source::Sni(credentials.into());
-                match authenticator.authenticate(&auth, &tunnel_id) {
-                    authentication::Status::Pass => {
-                        tunnel::AuthenticationPolicy::Authenticated(auth)
-                    }
-                    authentication::Status::Reject => {
-                        log_id!(debug, tunnel_id, "SNI authentication failed");
-                        return;
+        let (authentication_policy, sni_connection_guard) =
+            match context.authenticator.as_ref().zip(sni_auth_creds) {
+                None => (tunnel::AuthenticationPolicy::Default, None),
+                Some((authenticator, credentials)) => {
+                    let auth = authentication::Source::Sni(credentials.into());
+                    match authenticator.authenticate(&auth, &tunnel_id) {
+                        authentication::Status::Pass => {
+                            let guard = context.connection_limiter.as_ref().and_then(|limiter| {
+                                let creds = match &auth {
+                                    authentication::Source::Sni(s) => s.as_ref(),
+                                    authentication::Source::ProxyBasic(s) => s.as_ref(),
+                                };
+                                limiter.try_acquire(creds, protocol)
+                            });
+                            if context.connection_limiter.is_some() && guard.is_none() {
+                                log_id!(
+                                    debug,
+                                    tunnel_id,
+                                    "Connection limit exceeded for SNI-authenticated client"
+                                );
+                                return;
+                            }
+                            (tunnel::AuthenticationPolicy::Authenticated(auth), guard)
+                        }
+                        authentication::Status::Reject => {
+                            log_id!(debug, tunnel_id, "SNI authentication failed");
+                            return;
+                        }
                     }
                 }
-            }
-        };
+            };
 
         log_id!(debug, tunnel_id, "New tunnel for client");
         let mut tunnel = Tunnel::new(
@@ -697,6 +732,7 @@ impl Core {
             Box::new(HttpDownstream::new(context.clone(), codec, server_name)),
             Self::make_forwarder(context),
             authentication_policy,
+            sni_connection_guard,
             tunnel_id.clone(),
         );
 
@@ -752,6 +788,7 @@ impl Default for Context {
             metrics: Metrics::new().unwrap(),
             next_client_id: Default::default(),
             next_tunnel_id: Default::default(),
+            connection_limiter: None,
         }
     }
 }
