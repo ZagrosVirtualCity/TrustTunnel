@@ -1,11 +1,11 @@
 use proptest::prelude::*;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use trusttunnel_deeplink::{decode, encode, DeepLinkConfig, Protocol};
 
-fn arbitrary_socket_addr() -> impl Strategy<Value = SocketAddr> {
+fn arbitrary_address_string() -> impl Strategy<Value = String> {
     prop_oneof![
-        any::<Ipv4Addr>().prop_map(|ip| SocketAddr::new(IpAddr::V4(ip), 443)),
-        any::<Ipv6Addr>().prop_map(|ip| SocketAddr::new(IpAddr::V6(ip), 443)),
+        (any::<[u8; 4]>(), 1u16..=65535)
+            .prop_map(|(ip, port)| { format!("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], port) }),
+        "[a-z]{3,15}\\.[a-z]{2,10}\\.[a-z]{2,5}:[0-9]{2,5}",
     ]
 }
 
@@ -20,7 +20,7 @@ fn arbitrary_hex_string() -> impl Strategy<Value = Option<String>> {
 fn arbitrary_config() -> impl Strategy<Value = DeepLinkConfig> {
     (
         "[a-z]{3,20}\\.[a-z]{3,10}\\.[a-z]{2,5}",
-        prop::collection::vec(arbitrary_socket_addr(), 1..5),
+        prop::collection::vec(arbitrary_address_string(), 1..5),
         "[a-z0-9_]{3,20}",
         "[a-zA-Z0-9!@#$%]{8,30}",
         arbitrary_hex_string(),

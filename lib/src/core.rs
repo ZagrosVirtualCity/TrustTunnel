@@ -19,7 +19,7 @@ use crate::{
     authentication, http_ping_handler, http_speedtest_handler, log_id, log_utils, metrics,
     net_utils, reverse_proxy, rules, settings, tls_demultiplexer, tunnel,
 };
-use socket2::SockRef;
+use socket2::{Domain, Protocol as SockProtocol, SockRef, Socket, Type};
 use std::io;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -221,7 +221,23 @@ impl Core {
         let has_tcp_based_codec =
             settings.listen_protocols.http1.is_some() || settings.listen_protocols.http2.is_some();
 
-        let tcp_listener = TcpListener::bind(settings.listen_address).await?;
+        let tcp_listener = {
+            let addr = settings.listen_address;
+            let domain = if addr.is_ipv6() {
+                Domain::IPV6
+            } else {
+                Domain::IPV4
+            };
+            let socket = Socket::new(domain, Type::STREAM, Some(SockProtocol::TCP))?;
+            if domain == Domain::IPV6 {
+                socket.set_only_v6(false)?;
+            }
+            socket.set_reuse_address(true)?;
+            socket.set_nonblocking(true)?;
+            socket.bind(&addr.into())?;
+            socket.listen(1024)?;
+            TcpListener::from_std(socket.into())?
+        };
         info!("Listening to TCP {}", settings.listen_address);
 
         let tls_listener = Arc::new(TlsListener::new());
@@ -272,7 +288,7 @@ impl Core {
                             if let Err((client_id, message)) = Core::on_new_tls_connection(
                                 context.clone(),
                                 acceptor,
-                                client_addr.ip(),
+                                net_utils::unmap_ipv6(client_addr.ip()),
                                 client_id,
                             )
                             .await
@@ -293,7 +309,21 @@ impl Core {
             return Ok(());
         }
 
-        let socket = UdpSocket::bind(settings.listen_address).await?;
+        let socket = {
+            let addr = settings.listen_address;
+            let domain = if addr.is_ipv6() {
+                Domain::IPV6
+            } else {
+                Domain::IPV4
+            };
+            let socket = Socket::new(domain, Type::DGRAM, Some(SockProtocol::UDP))?;
+            if domain == Domain::IPV6 {
+                socket.set_only_v6(false)?;
+            }
+            socket.set_nonblocking(true)?;
+            socket.bind(&addr.into())?;
+            UdpSocket::from_std(socket.into())?
+        };
         info!("Listening to UDP {}", settings.listen_address);
 
         let mut quic_listener = QuicMultiplexer::new(
@@ -524,7 +554,10 @@ impl Core {
         client_id: log_utils::IdChain<u64>,
     ) {
         // Apply connection filtering rules
-        let client_ip = socket.peer_addr().ok().map(|addr| addr.ip());
+        let client_ip = socket
+            .peer_addr()
+            .ok()
+            .map(|addr| net_utils::unmap_ipv6(addr.ip()));
         let client_random = Some(socket.client_random());
 
         if let Err(deny_reason) = Self::evaluate_connection_rules(

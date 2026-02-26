@@ -5,12 +5,11 @@ use crate::{
 #[cfg(feature = "rt_doc")]
 use macros::{Getter, RuntimeDoc};
 use once_cell::sync::Lazy;
-use std::net::SocketAddr;
 use toml_edit::{value, Document};
 
 pub fn build(
     client: &String,
-    addresses: Vec<SocketAddr>,
+    addresses: Vec<String>,
     username: &[registry_based::Client],
     hostsettings: &TlsHostsSettings,
     custom_sni: Option<String>,
@@ -55,8 +54,8 @@ pub fn build(
 pub struct ClientConfig {
     /// Endpoint host name, used for TLS session establishment
     hostname: String,
-    /// Endpoint addresses.
-    addresses: Vec<SocketAddr>,
+    /// Endpoint addresses in `IP:port` or `hostname:port` format
+    addresses: Vec<String>,
     /// Custom SNI value for TLS handshake.
     /// If set, this value is used as the TLS SNI instead of the hostname.
     custom_sni: String,
@@ -87,7 +86,7 @@ impl ClientConfig {
     pub fn compose_toml(&self) -> String {
         let mut doc: Document = TEMPLATE.parse().unwrap();
         doc["hostname"] = value(&self.hostname);
-        let vec = toml_edit::Array::from_iter(self.addresses.iter().map(|x| x.to_string()));
+        let vec = toml_edit::Array::from_iter(self.addresses.iter().map(|x| x.as_str()));
         doc["addresses"] = value(vec);
         doc["custom_sni"] = value(&self.custom_sni);
         doc["has_ipv6"] = value(self.has_ipv6);

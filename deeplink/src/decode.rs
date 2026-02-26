@@ -2,7 +2,6 @@ use crate::error::{DeepLinkError, Result};
 use crate::types::{DeepLinkConfig, Protocol, TlvTag};
 use crate::varint::decode_varint;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use std::net::SocketAddr;
 
 /// Decode a string from UTF-8 bytes.
 fn decode_string(data: &[u8]) -> Result<String> {
@@ -31,14 +30,6 @@ fn decode_protocol(data: &[u8]) -> Result<Protocol> {
         ));
     }
     Protocol::from_u8(data[0])
-}
-
-/// Decode a socket address from a UTF-8 string.
-fn decode_address(data: &[u8]) -> Result<SocketAddr> {
-    let addr_str = decode_string(data)?;
-    addr_str
-        .parse()
-        .map_err(|e| DeepLinkError::InvalidAddress(format!("{}: {}", e, addr_str)))
 }
 
 /// TLV parser with stateful offset tracking.
@@ -99,7 +90,7 @@ pub fn decode_tlv_payload(payload: &[u8]) -> Result<DeepLinkConfig> {
     let mut parser = TlvParser::new(payload);
 
     let mut hostname: Option<String> = None;
-    let mut addresses: Vec<SocketAddr> = Vec::new();
+    let mut addresses: Vec<String> = Vec::new();
     let mut username: Option<String> = None;
     let mut password: Option<String> = None;
     let mut custom_sni: Option<String> = None;
@@ -124,7 +115,7 @@ pub fn decode_tlv_payload(payload: &[u8]) -> Result<DeepLinkConfig> {
                 hostname = Some(decode_string(&value)?);
             }
             TlvTag::Address => {
-                addresses.push(decode_address(&value)?);
+                addresses.push(decode_string(&value)?);
             }
             TlvTag::CustomSni => {
                 custom_sni = Some(decode_string(&value)?);
@@ -239,11 +230,15 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_address() {
-        let addr = decode_address(b"1.2.3.4:443").unwrap();
-        assert_eq!(addr.to_string(), "1.2.3.4:443");
+    fn test_decode_address_ip() {
+        let addr = decode_string(b"1.2.3.4:443").unwrap();
+        assert_eq!(addr, "1.2.3.4:443");
+    }
 
-        assert!(decode_address(b"invalid").is_err());
+    #[test]
+    fn test_decode_address_domain() {
+        let addr = decode_string(b"vpn.example.com:443").unwrap();
+        assert_eq!(addr, "vpn.example.com:443");
     }
 
     #[test]

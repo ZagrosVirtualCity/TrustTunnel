@@ -52,7 +52,7 @@ The endpoint binary accepts the following command line arguments:
 | `<settings>` | - | **Required.** Path to main settings file | - |
 | `<tls_hosts_settings>` | - | **Required.** Path to TLS hosts settings file | - |
 | `--client_config` | `-c` | Print endpoint config for specified client and exit | - |
-| `--address` | `-a` | Endpoint address to add to client config (requires `-c`) | - |
+| `--address` | `-a` | Endpoint address to add to client config (requires `-c`). Accepts `ip`, `ip:port`, `domain`, or `domain:port`. | - |
 
 ### Examples
 
@@ -66,11 +66,17 @@ The endpoint binary accepts the following command line arguments:
 # Start with file logging
 ./trusttunnel_endpoint vpn.toml hosts.toml --logfile /var/log/trusttunnel.log
 
-# Export client configuration
+# Export client configuration with IP address
 ./trusttunnel_endpoint vpn.toml hosts.toml -c username -a 203.0.113.1
 
 # Export client configuration with explicit port
 ./trusttunnel_endpoint vpn.toml hosts.toml -c username -a 203.0.113.1:443
+
+# Export client configuration with domain name
+./trusttunnel_endpoint vpn.toml hosts.toml -c username -a vpn.example.com
+
+# Export client configuration with domain name and explicit port
+./trusttunnel_endpoint vpn.toml hosts.toml -c username -a vpn.example.com:443
 ```
 
 ---

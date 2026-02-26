@@ -1,5 +1,11 @@
 # CHANGELOG
 
+- [Feature] The `-a` flag now accepts `domain` and `domain:port` in addition to `ip` and `ip:port`.
+  The exported client configuration will contain the domain name, which the client resolves via DNS at connect time.
+- [Feature] Deep-link format (`tt://`) now supports domain names in the `addresses` field.
+- [Feature] When listening on `[::]`, the endpoint now explicitly sets `IPV6_V6ONLY=false` to accept
+  both IPv4 and IPv6 connections on a single socket (dual-stack).
+
 ## 1.0.1
 
 - [Feature] Added new `trusttunnel-deeplink` library crate for encoding/decoding `tt://` URIs

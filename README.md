@@ -253,14 +253,14 @@ The endpoint binary can generate client configurations in two formats:
 Generate a compact `tt://` URI suitable for QR codes and mobile apps:
 
 ```shell
-# <client_name> - name of the client whose credentials will be included
-# <public_ip> - `ip` or `ip:port` that the user will use to connect to the endpoint
-#             If only `ip` is specified, the port from the `listen_address` field will be used
+# <client_name> - name of the client those credentials will be included in the configuration
+# <address> - `ip`, `ip:port`, `domain`, or `domain:port` that the client will use to connect
+#           If only `ip` or `domain` is specified, the port from the `listen_address` field will be used
 cd /opt/trusttunnel/
-./trusttunnel_endpoint vpn.toml hosts.toml -c <client_name> -a <public_ip>
+./trusttunnel_endpoint vpn.toml hosts.toml -c <client_name> -a <address>
 
 # Or explicitly specify the format:
-./trusttunnel_endpoint vpn.toml hosts.toml -c <client_name> -a <public_ip> --format deeplink
+./trusttunnel_endpoint vpn.toml hosts.toml -c <client_name> -a <address> --format deeplink
 ```
 
 This outputs a `tt://` deep-link URI that can be:

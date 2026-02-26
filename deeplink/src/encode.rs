@@ -43,7 +43,7 @@ pub fn encode_tlv_payload(config: &DeepLinkConfig) -> Result<Vec<u8>> {
     payload.extend(encode_string_field(TlvTag::Password, &config.password)?);
 
     for addr in &config.addresses {
-        payload.extend(encode_string_field(TlvTag::Address, &addr.to_string())?);
+        payload.extend(encode_string_field(TlvTag::Address, addr)?);
     }
 
     // client_random_prefix: include if present and non-empty
@@ -101,7 +101,6 @@ pub fn encode(config: &DeepLinkConfig) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::SocketAddr;
 
     #[test]
     fn test_encode_tlv() {
@@ -155,7 +154,7 @@ mod tests {
     fn test_encode_tlv_payload_minimal() {
         let config = DeepLinkConfig::builder()
             .hostname("vpn.example.com".to_string())
-            .addresses(vec!["1.2.3.4:443".parse::<SocketAddr>().unwrap()])
+            .addresses(vec!["1.2.3.4:443".to_string()])
             .username("alice".to_string())
             .password("secret".to_string())
             .build()
@@ -171,7 +170,7 @@ mod tests {
     fn test_encode_tlv_payload_with_optional_fields() {
         let config = DeepLinkConfig::builder()
             .hostname("vpn.example.com".to_string())
-            .addresses(vec!["1.2.3.4:443".parse().unwrap()])
+            .addresses(vec!["1.2.3.4:443".to_string()])
             .username("alice".to_string())
             .password("secret".to_string())
             .custom_sni(Some("example.org".to_string()))
@@ -192,7 +191,7 @@ mod tests {
     fn test_encode_full_uri() {
         let config = DeepLinkConfig::builder()
             .hostname("vpn.example.com".to_string())
-            .addresses(vec!["1.2.3.4:443".parse().unwrap()])
+            .addresses(vec!["1.2.3.4:443".to_string()])
             .username("alice".to_string())
             .password("secret".to_string())
             .build()

@@ -317,11 +317,12 @@ fn print_setup_complete_summary(
         lib_settings_path, hosts_settings_path
     );
     println!();
-    println!("2. Export client configuration (replace <username> and <public_ip>):");
+    println!("2. Export client configuration (replace <username> and <address>):");
     println!(
-        "   ./trusttunnel_endpoint {} {} -c <username> -a <public_ip>:443",
+        "   ./trusttunnel_endpoint {} {} -c <username> -a <address>",
         lib_settings_path, hosts_settings_path
     );
+    println!("   where <address> is ip, ip:port, domain, or domain:port");
     println!();
     println!("3. Use the exported config with:");
     println!("   • TrustTunnel CLI Client - Pass to setup_wizard --endpoint_config");

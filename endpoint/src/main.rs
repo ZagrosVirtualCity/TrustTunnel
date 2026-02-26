@@ -115,7 +115,7 @@ fn main() {
                 .requires(CLIENT_CONFIG_PARAM_NAME)
                 .short('a')
                 .long("address")
-                .help("Endpoint address to be added to client's config."),
+                .help("Endpoint address to be added to client's config. Accepts ip, ip:port, domain, or domain:port."),
             clap::Arg::new(CUSTOM_SNI_PARAM_NAME)
                 .action(clap::ArgAction::Set)
                 .requires(CLIENT_CONFIG_PARAM_NAME)
@@ -207,19 +207,24 @@ fn main() {
 
     if args.contains_id(CLIENT_CONFIG_PARAM_NAME) {
         let username = args.get_one::<String>(CLIENT_CONFIG_PARAM_NAME).unwrap();
-        let addresses: Vec<SocketAddr> = args
+        let listen_port = settings.get_listen_address().port();
+        let addresses: Vec<String> = args
             .get_many::<String>(ADDRESS_PARAM_NAME)
             .expect("At least one address should be specified")
-            .map(|x| {
-                SocketAddr::from_str(x)
-                    .or_else(|_| {
-                        SocketAddr::from_str(&format!("{}:{}", x, settings.get_listen_address().port()))
-                    })
-                    .unwrap_or_else(|_| {
-                        panic!("Failed to parse address. Expected `ip` or `ip:port` format, found: `{}`", x);
-                    })
-            })
+            .map(|x| parse_endpoint_address(x, listen_port))
             .collect();
+
+        for addr in &addresses {
+            if let Some(domain) = extract_domain_for_warning(addr) {
+                if !domain_matches_tls_hosts(domain, &tls_hosts_settings) {
+                    warn!(
+                        "Domain '{}' does not match any hostname in TLS hosts settings. \
+                         Please verify this is correct (it may be a typo).",
+                        domain
+                    );
+                }
+            }
+        }
 
         let custom_sni = args.get_one::<String>(CUSTOM_SNI_PARAM_NAME).cloned();
         if let Some(ref sni) = custom_sni {
@@ -396,4 +401,213 @@ fn main() {
     });
 
     std::process::exit(exit_code);
+}
+
+/// Returns the domain part of an address string if it is a domain (not an IP).
+/// Returns `None` for IP addresses (both IPv4 and IPv6).
+fn extract_domain_for_warning(addr: &str) -> Option<&str> {
+    if SocketAddr::from_str(addr).is_ok() {
+        return None;
+    }
+    if addr.parse::<std::net::IpAddr>().is_ok() {
+        return None;
+    }
+    let domain = addr.rsplit_once(':').map(|(d, _)| d).unwrap_or(addr);
+    if domain.parse::<std::net::IpAddr>().is_ok() {
+        return None;
+    }
+    Some(domain)
+}
+
+fn domain_matches_tls_hosts(domain: &str, tls_hosts_settings: &settings::TlsHostsSettings) -> bool {
+    tls_hosts_settings
+        .get_main_hosts()
+        .iter()
+        .any(|h| h.hostname == domain || h.allowed_sni.iter().any(|s| s == domain))
+}
+
+/// Parse an endpoint address string into a normalized `host:port` format.
+///
+/// Accepts the following formats:
+/// - `IP:port` (e.g. `1.2.3.4:443`, `[::1]:443`)
+/// - `IP` without port (e.g. `1.2.3.4`, `::1`) — `default_port` is appended
+/// - `domain:port` (e.g. `vpn.example.com:443`)
+/// - `domain` without port (e.g. `vpn.example.com`) — `default_port` is appended
+fn parse_endpoint_address(input: &str, default_port: u16) -> String {
+    if let Ok(addr) = SocketAddr::from_str(input) {
+        return addr.to_string();
+    }
+    if let Ok(addr) = SocketAddr::from_str(&format!("{input}:{default_port}")) {
+        return addr.to_string();
+    }
+    if let Ok(ip) = input.parse::<std::net::IpAddr>() {
+        return SocketAddr::new(ip, default_port).to_string();
+    }
+    if let Some((domain, port_str)) = input.rsplit_once(':') {
+        let port: u16 = port_str.parse().unwrap_or_else(|_| {
+            panic!(
+                "Failed to parse port in address '{}'. \
+                 Expected `ip`, `ip:port`, `domain`, or `domain:port` format.",
+                input
+            );
+        });
+        format!("{domain}:{port}")
+    } else {
+        format!("{input}:{default_port}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_tls_hosts(hostnames: &[&str]) -> settings::TlsHostsSettings {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!("trusttunnel_test_cert_{id}.pem"));
+        std::fs::write(&tmp, b"").unwrap();
+        let path = tmp.to_str().unwrap();
+        let entries: String = hostnames
+            .iter()
+            .map(|&h| {
+                format!(
+                    "[[main_hosts]]\nhostname = \"{}\"\ncert_chain_path = \"{}\"\nprivate_key_path = \"{}\"\n",
+                    h, path, path
+                )
+            })
+            .collect();
+        toml::from_str(&entries).unwrap()
+    }
+
+    #[test]
+    fn test_extract_domain_ipv4_returns_none() {
+        assert_eq!(extract_domain_for_warning("1.2.3.4:443"), None);
+    }
+
+    #[test]
+    fn test_extract_domain_ipv6_returns_none() {
+        assert_eq!(extract_domain_for_warning("[::1]:443"), None);
+    }
+
+    #[test]
+    fn test_extract_domain_bare_ipv6_returns_none() {
+        assert_eq!(extract_domain_for_warning("::1"), None);
+    }
+
+    #[test]
+    fn test_extract_domain_with_port_returns_domain() {
+        assert_eq!(
+            extract_domain_for_warning("vpn.example.com:443"),
+            Some("vpn.example.com")
+        );
+    }
+
+    #[test]
+    fn test_extract_domain_without_port_returns_domain() {
+        assert_eq!(
+            extract_domain_for_warning("vpn.example.com"),
+            Some("vpn.example.com")
+        );
+    }
+
+    #[test]
+    fn test_domain_matches_tls_hosts_exact() {
+        let hosts = make_tls_hosts(&["vpn.example.com"]);
+        assert!(domain_matches_tls_hosts("vpn.example.com", &hosts));
+    }
+
+    #[test]
+    fn test_domain_matches_tls_hosts_no_match() {
+        let hosts = make_tls_hosts(&["vpn.example.com"]);
+        assert!(!domain_matches_tls_hosts("other.example.com", &hosts));
+    }
+
+    #[test]
+    fn test_domain_matches_tls_hosts_allowed_sni() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(1000);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!("trusttunnel_test_cert_{id}.pem"));
+        std::fs::write(&tmp, b"").unwrap();
+        let path = tmp.to_str().unwrap();
+        let toml = format!(
+            "[[main_hosts]]\nhostname = \"vpn.example.com\"\ncert_chain_path = \"{}\"\nprivate_key_path = \"{}\"\nallowed_sni = [\"alias.example.com\"]\n",
+            path, path
+        );
+        let hosts: settings::TlsHostsSettings = toml::from_str(&toml).unwrap();
+        assert!(domain_matches_tls_hosts("alias.example.com", &hosts));
+    }
+
+    #[test]
+    fn test_domain_matches_tls_hosts_different_host() {
+        let hosts = make_tls_hosts(&["other.example.com"]);
+        assert!(!domain_matches_tls_hosts("vpn.example.com", &hosts));
+    }
+
+    #[test]
+    fn test_parse_ipv4_with_port() {
+        assert_eq!(parse_endpoint_address("1.2.3.4:443", 8443), "1.2.3.4:443");
+    }
+
+    #[test]
+    fn test_parse_ipv4_without_port() {
+        assert_eq!(parse_endpoint_address("1.2.3.4", 443), "1.2.3.4:443");
+    }
+
+    #[test]
+    fn test_parse_ipv6_with_port() {
+        assert_eq!(parse_endpoint_address("[::1]:443", 8443), "[::1]:443");
+    }
+
+    #[test]
+    fn test_parse_ipv6_without_port() {
+        assert_eq!(parse_endpoint_address("::1", 443), "[::1]:443");
+    }
+
+    #[test]
+    fn test_parse_domain_with_port() {
+        assert_eq!(
+            parse_endpoint_address("vpn.example.com:8443", 443),
+            "vpn.example.com:8443"
+        );
+    }
+
+    #[test]
+    fn test_parse_domain_without_port() {
+        assert_eq!(
+            parse_endpoint_address("vpn.example.com", 443),
+            "vpn.example.com:443"
+        );
+    }
+
+    #[test]
+    fn test_parse_domain_default_port_applied() {
+        assert_eq!(
+            parse_endpoint_address("my-vpn.example.org", 8443),
+            "my-vpn.example.org:8443"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Failed to parse port")]
+    fn test_parse_domain_invalid_port() {
+        parse_endpoint_address("vpn.example.com:notaport", 443);
+    }
+
+    #[test]
+    fn test_parse_ipv6_with_port_bracket_notation() {
+        assert_eq!(
+            parse_endpoint_address("[2001:db8::1]:443", 8443),
+            "[2001:db8::1]:443"
+        );
+    }
+
+    #[test]
+    fn test_parse_bare_ipv6_without_port_gets_default() {
+        assert_eq!(
+            parse_endpoint_address("2001:db8::1", 443),
+            "[2001:db8::1]:443"
+        );
+    }
 }

@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::process::Command;
 use trusttunnel_deeplink::{decode, encode, DeepLinkConfig, Protocol};
 
@@ -79,7 +78,7 @@ password = "secret123"
     // Rust encode
     let config = DeepLinkConfig::builder()
         .hostname("vpn.example.com".to_string())
-        .addresses(vec!["1.2.3.4:443".parse::<SocketAddr>().unwrap()])
+        .addresses(vec!["1.2.3.4:443".to_string()])
         .username("alice".to_string())
         .password("secret123".to_string())
         .build()
@@ -123,8 +122,8 @@ skip_verification = false
     let config = DeepLinkConfig::builder()
         .hostname("secure.vpn.example.com".to_string())
         .addresses(vec![
-            "192.168.1.1:8443".parse::<SocketAddr>().unwrap(),
-            "10.0.0.1:443".parse().unwrap(),
+            "192.168.1.1:8443".to_string(),
+            "10.0.0.1:443".to_string(),
         ])
         .username("premium_user".to_string())
         .password("very_secret_password".to_string())
@@ -186,10 +185,7 @@ upstream_protocol = "http2"
     // Verify fields
     assert_eq!(rust_config.hostname, "test.example.org");
     assert_eq!(rust_config.addresses.len(), 1);
-    assert_eq!(
-        rust_config.addresses[0],
-        "203.0.113.1:9443".parse::<SocketAddr>().unwrap()
-    );
+    assert_eq!(rust_config.addresses[0], "203.0.113.1:9443");
     assert_eq!(rust_config.username, "testuser");
     assert_eq!(rust_config.password, "testpass");
     assert_eq!(rust_config.upstream_protocol, Protocol::Http2);
@@ -210,7 +206,7 @@ client_random_prefix = "aabbccddee"
     // Rust encode
     let config = DeepLinkConfig::builder()
         .hostname("crp.example.com".to_string())
-        .addresses(vec!["10.20.30.40:8443".parse::<SocketAddr>().unwrap()])
+        .addresses(vec!["10.20.30.40:8443".to_string()])
         .username("testuser".to_string())
         .password("testpass".to_string())
         .client_random_prefix(Some("aabbccddee".to_string()))
@@ -238,7 +234,7 @@ fn test_roundtrip_through_both_implementations() {
     // Start with Rust config
     let original_config = DeepLinkConfig::builder()
         .hostname("roundtrip.example.com".to_string())
-        .addresses(vec!["198.51.100.1:443".parse::<SocketAddr>().unwrap()])
+        .addresses(vec!["198.51.100.1:443".to_string()])
         .username("roundtrip_user".to_string())
         .password("roundtrip_pass".to_string())
         .custom_sni(Some("sni.example.com".to_string()))

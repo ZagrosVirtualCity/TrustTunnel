@@ -1,6 +1,5 @@
 use crate::error::{DeepLinkError, Result};
 use std::fmt;
-use std::net::SocketAddr;
 use std::str::FromStr;
 
 /// TLV tag identifiers (per DEEP_LINK.md specification)
@@ -100,7 +99,7 @@ impl fmt::Display for Protocol {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeepLinkConfig {
     pub hostname: String,
-    pub addresses: Vec<SocketAddr>,
+    pub addresses: Vec<String>,
     pub username: String,
     pub password: String,
     pub client_random_prefix: Option<String>,
@@ -140,7 +139,7 @@ impl DeepLinkConfig {
 #[derive(Debug, Default)]
 pub struct DeepLinkConfigBuilder {
     hostname: Option<String>,
-    addresses: Option<Vec<SocketAddr>>,
+    addresses: Option<Vec<String>>,
     username: Option<String>,
     password: Option<String>,
     client_random_prefix: Option<String>,
@@ -158,7 +157,7 @@ impl DeepLinkConfigBuilder {
         self
     }
 
-    pub fn addresses(mut self, addresses: Vec<SocketAddr>) -> Self {
+    pub fn addresses(mut self, addresses: Vec<String>) -> Self {
         self.addresses = Some(addresses);
         self
     }
@@ -282,7 +281,7 @@ mod tests {
     fn test_builder_success() {
         let config = DeepLinkConfig::builder()
             .hostname("vpn.example.com".to_string())
-            .addresses(vec!["1.2.3.4:443".parse().unwrap()])
+            .addresses(vec!["1.2.3.4:443".to_string()])
             .username("alice".to_string())
             .password("secret".to_string())
             .build()
@@ -306,10 +305,22 @@ mod tests {
     }
 
     #[test]
+    fn test_builder_domain_address() {
+        let config = DeepLinkConfig::builder()
+            .hostname("vpn.example.com".to_string())
+            .addresses(vec!["vpn.example.com:443".to_string()])
+            .username("alice".to_string())
+            .password("secret".to_string())
+            .build()
+            .unwrap();
+        assert_eq!(config.addresses[0], "vpn.example.com:443");
+    }
+
+    #[test]
     fn test_validate_empty_hostname() {
         let config = DeepLinkConfig {
             hostname: String::new(),
-            addresses: vec!["1.2.3.4:443".parse().unwrap()],
+            addresses: vec!["1.2.3.4:443".to_string()],
             username: "alice".to_string(),
             password: "secret".to_string(),
             custom_sni: None,

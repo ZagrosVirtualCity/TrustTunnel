@@ -593,6 +593,21 @@ pub(crate) const fn is_global_ipv6(ip: &Ipv6Addr) -> bool {
     }
 }
 
+/// Converts an IPv6-mapped IPv4 address (`::ffff:a.b.c.d`) to a plain `IpAddr::V4`.
+///
+/// When the endpoint listens on `[::]` with `IPV6_V6ONLY=false`, the OS presents
+/// incoming IPv4 connections as IPv6-mapped addresses. This function unmaps them so
+/// that IP-based filtering (rules engine, `allow_private_network_connections`) works
+/// correctly with IPv4 CIDR ranges.
+#[must_use]
+#[inline]
+pub(crate) fn unmap_ipv6(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        v4 => v4,
+    }
+}
+
 /// Returns [`true`] if the address appears to be globally routable.
 #[must_use]
 #[inline]
@@ -806,5 +821,26 @@ mod tests {
                 .iter()
                 .count()
         );
+    }
+
+    #[test]
+    fn test_unmap_ipv6_mapped_ipv4() {
+        use std::net::IpAddr;
+        let mapped: IpAddr = "::ffff:1.2.3.4".parse().unwrap();
+        assert_eq!(super::unmap_ipv6(mapped), IpAddr::from([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn test_unmap_ipv6_pure_ipv6_unchanged() {
+        use std::net::IpAddr;
+        let v6: IpAddr = "::1".parse().unwrap();
+        assert_eq!(super::unmap_ipv6(v6), v6);
+    }
+
+    #[test]
+    fn test_unmap_ipv6_plain_ipv4_unchanged() {
+        use std::net::IpAddr;
+        let v4: IpAddr = "1.2.3.4".parse().unwrap();
+        assert_eq!(super::unmap_ipv6(v4), v4);
     }
 }
